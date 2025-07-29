@@ -2,202 +2,349 @@ import Phaser from "phaser";
 import { CARDS } from "../../data/cards";
 
 export class PlaceholderCard extends Phaser.GameObjects.Container {
-  constructor(scene, baseId, x, y, uid = null) {
+  // tweak visuals here if you like
+  static W = 100;
+  static H = 150;
+  static CORNER = 10;
+
+  static COLORS = {
+    frame: 0xffffff,
+    shadow: 0x000000,
+    nameBg: 0x000000,
+    nameText: 0xffffff,
+    costFill: 0x0080ff,
+    costStroke: 0xffffff,
+    atkHpBg: 0x000000,
+    atkText: 0xffffff,
+    hpText: 0xffffff,
+    spellText: 0xffe066,
+    selectOutline: 0xffff00,
+    attackableOutline: 0x00ff66,
+  };
+
+  constructor(scene, baseId, x = W + 10, y, uid = null) {
     super(scene, x, y);
     this.scene = scene;
-    this.cardId = baseId; // base id for stats
-    this.uid = uid ?? baseId; // unique id for state
-    this.isCard = true; // tag used in hit tests
-    
-    // 1) add the base graphic (replace with your PNG later)
-    const WIDTH = 80,
-      HEIGHT = 100;
-    const bg = scene.add
-      .rectangle(0, 0, WIDTH, HEIGHT, 0x444444)
-      .setStrokeStyle(2, 0xffffff)
-      .setOrigin(0.5);
-    this.add(bg);
+    this.cardId = baseId; // base stats id
+    this.uid = uid ?? baseId; // unique instance id
+    this.isCard = true; // used by hit tests
 
-    // store sizes for positioning helpers
-    this.cardWidth = WIDTH;
-    this.cardHeight = HEIGHT;
+    this.cardWidth = PlaceholderCard.W;
+    this.cardHeight = PlaceholderCard.H;
 
-    // 2) add name + cost INSIDE the container
+    // ── soft drop shadow
+    this._addDropShadow();
+
+    // ── artwork with rounded mask (falls back to gray if missing)
+    this._addArtwork();
+
+    // ── outer frame
+    this._addFrame();
+
+    // data for overlays
     const data = CARDS.find((c) => c.id === baseId) || {};
-    this.addNameAndCost(data);
 
-    this.addTypeOverlay(data);
+    // ── overlays
+    this._buildNameAndCost(data);
+    this._buildTypeOverlay(data);
 
-    // 3) enable input on the whole card
-    this.setSize(WIDTH, HEIGHT); // important for hit area
+    // input on whole card (correct local coords)
+    this.setSize(this.cardWidth, this.cardHeight);
     this.setInteractive(
-      new Phaser.Geom.Rectangle(0, 0, WIDTH, HEIGHT),
+      new Phaser.Geom.Rectangle(0, 0, this.cardWidth, this.cardHeight),
       Phaser.Geom.Rectangle.Contains
     );
 
-    // 4) add to display list
     scene.add.existing(this);
+
+    // highlight graphics refs
+    this.hlGfx = null; // yellow selected outline
+    this.attackableGfx = null; // green "can attack" outline
   }
 
-  addNameAndCost(data) {
-    const PAD_X = 6; // horizontal padding for the bar
-    const PAD_Y = 0; // vertical padding for the bar
-    const NAME_TOP = 45; // distance from top edge where the name starts
-    const r = 10; // cost badge radius
+  // ─────────────────────────────────────────────
+  // Build parts
+  // ─────────────────────────────────────────────
+  _addDropShadow() {
+    const g = this.scene.add.graphics();
+    g.fillStyle(PlaceholderCard.COLORS.shadow, 0.28);
+    g.fillRoundedRect(
+      -this.cardWidth / 2 + 3,
+      -this.cardHeight / 2 + 5,
+      this.cardWidth + 2,
+      this.cardHeight + 6,
+      PlaceholderCard.CORNER + 2
+    );
+    this.add(g);
+  }
 
-    // ---- Name text (wrap to multiple lines if needed)
-    const usableWidth = this.cardWidth - PAD_X * 2;
-    const nameYTop = -this.cardHeight / 2 + NAME_TOP;
+  _addArtwork() {
+    const data = CARDS.find((c) => c.id === this.cardId) || {};
+    const texKey = (data.frame || "").trim();
+
+    // Debug once per card
+    if (!texKey) {
+      console.warn("[Card] no frame for", this.cardId);
+    } else if (!this.scene.textures.exists(texKey)) {
+      console.warn(
+        "[Card] texture missing:",
+        texKey,
+        "available:",
+        Object.keys(this.scene.textures.list)
+      );
+    }
+
+    // Off-display graphics used only for the mask
+    const maskG = this.scene.make.graphics({ x: 0, y: 0, add: false });
+    maskG.fillStyle(0xffffff, 1);
+    maskG.fillRoundedRect(
+      this.x - this.cardWidth / 2,
+      this.y - this.cardHeight / 2,
+      this.cardWidth,
+      this.cardHeight,
+      PlaceholderCard.CORNER
+    );
+    const geomMask = maskG.createGeometryMask();
+
+    let art;
+    if (texKey && this.scene.textures.exists(texKey)) {
+      art = this.scene.add.image(0, 0, texKey).setOrigin(0.5);
+
+      // scale to fit
+      const src = this.scene.textures.get(texKey).getSourceImage();
+      const scale = Math.min(
+        this.cardWidth / src.width,
+        this.cardHeight / src.height
+      );
+      art.setScale(scale);
+    } else {
+      // fallback neutral bg
+      art = this.scene.add
+        .rectangle(0, 0, this.cardWidth, this.cardHeight, 0x444444)
+        .setOrigin(0.5);
+    }
+
+    art.setMask(geomMask);
+    this.add(art);
+
+    // subtle glass highlight on top
+    const glass = this.scene.add.graphics();
+    const h = this.cardHeight * 0.45;
+    glass.fillStyle(0xffffff, 0.07);
+    glass.fillRoundedRect(
+      -this.cardWidth / 2,
+      -this.cardHeight / 2,
+      this.cardWidth,
+      h,
+      { tl: PlaceholderCard.CORNER, tr: PlaceholderCard.CORNER, bl: 0, br: 0 }
+    );
+    this.add(glass);
+
+    // keep a reference so you can destroy later if needed
+    this._art = art;
+    this._artMaskG = maskG;
+  }
+
+  _addFrame() {
+    const g = this.scene.add.graphics();
+    g.lineStyle(2, PlaceholderCard.COLORS.frame, 1);
+    g.strokeRoundedRect(
+      -this.cardWidth / 2,
+      -this.cardHeight / 2,
+      this.cardWidth,
+      this.cardHeight,
+      PlaceholderCard.CORNER
+    );
+    this.add(g);
+  }
+
+  // ─────────────────────────────────────────────
+  // Name + Cost
+  // ─────────────────────────────────────────────
+  _buildNameAndCost(data) {
+    const PAD_X = 6;
+    const NAME_TOP = 46; // px from top edge
+    const r = 11;
+
+    const usableW = this.cardWidth - PAD_X * 2;
+    const yTop = -this.cardHeight / 2 + NAME_TOP;
 
     const nameText = this.scene.add
-      .text(0, nameYTop, data.name || "?", {
-        fontSize: 14,
-        color: "#fff",
+      .text(0, yTop, data.name || "?", {
+        fontSize: "13px",
+        color: "#ffffff",
+        fontStyle: "bold",
         align: "center",
-        wordWrap: { width: usableWidth, useAdvancedWrap: true },
+        wordWrap: { width: usableW, useAdvancedWrap: true },
       })
       .setOrigin(0.5, 0);
 
-    // Measure the rendered text (accounts for wrapping & current scale)
-    const nameBounds = nameText.getBounds();
-    const nameHeight = nameBounds.height; // already includes any internal line spacing
-
-    // ---- Background sized to the actual text height
-    const bgW = this.cardWidth - 8;
-    const bgH = nameHeight + PAD_Y * 2;
-    const bgCenterY = nameYTop + bgH / 2;
+    const bounds = nameText.getBounds();
+    const bgH = bounds.height + 2;
 
     const nameBg = this.scene.add
-      .rectangle(0, bgCenterY, bgW, bgH, 0x000000, 0.45)
+      .rectangle(0, yTop + bgH / 2, this.cardWidth - 10, bgH, 0x000000, 0.48)
       .setOrigin(0.5);
 
-    // Ensure text stays above the background
-    nameBg.setDepth(1);
-    nameText.setDepth(2);
-
-    // ---- Centered cost badge near the top, but never overlapping the name bar
+    // cost badge (center), avoid overlapping name bar
     const topEdge = -this.cardHeight / 2;
-    let badgeY = topEdge + r - 8;
+    let badgeY = topEdge + r + 2;
+    if (badgeY + r > yTop) badgeY = yTop - r - 2;
 
-    // Prevent overlap: if badge bottom would touch the name bar top, push it up
-    const nameBgTop = nameYTop - PAD_Y; // actual top edge of the bar
-    if (badgeY + r > nameBgTop) {
-      badgeY = nameBgTop - r - 2; // 2px gap
-    }
-
-    const badge = this.scene.add.graphics();
-    badge.fillStyle(0x0080ff).fillCircle(0, 0, r);
-    badge.lineStyle(2, 0xffffff).strokeCircle(0, 0, r);
+    const badgeG = this.scene.add.graphics();
+    badgeG.fillStyle(PlaceholderCard.COLORS.costFill, 1).fillCircle(0, 0, r);
+    badgeG
+      .lineStyle(2, PlaceholderCard.COLORS.costStroke, 1)
+      .strokeCircle(0, 0, r);
 
     const costText = this.scene.add
       .text(0, 0, String(data.cost ?? "?"), {
-        fontSize: 14,
-        color: "#fff",
+        fontSize: "14px",
+        color: "#ffffff",
       })
       .setOrigin(0.5);
 
-    // Fit digits inside the circle
-    const maxTextW = r * 1.6;
-    const costBounds = costText.getBounds();
-    if (costBounds.width > maxTextW && costBounds.width > 0) {
-      costText.setScale(maxTextW / costBounds.width);
+    // fit inside circle if necessary
+    const maxW = r * 1.6;
+    const cBounds = costText.getBounds();
+    if (cBounds.width > maxW && cBounds.width > 0) {
+      costText.setScale(maxW / cBounds.width);
     }
 
-    const overlay = this.scene.add.container(0, badgeY, [badge, costText]);
-    overlay.setDepth(3);
+    const costOverlay = this.scene.add.container(0, badgeY, [badgeG, costText]);
 
-    // ---- Keep refs & add in z-order (bg → text → badge)
+    // z-order
+    nameBg.setDepth(1);
+    nameText.setDepth(2);
+    costOverlay.setDepth(3);
+
+    this.add([nameBg, nameText, costOverlay]);
+
+    // keep refs
     this.nameText = nameText;
-    this.costOverlay = overlay;
-    this.add([nameBg, nameText, overlay]);
+    this.nameBg = nameBg;
+    this.costText = costText;
+    this.costOverlay = costOverlay;
   }
 
-  addTypeOverlay(data) {
-    switch (data.type) {
-      case "creature":
-        this.addAtkDefText(data.attack, data.health);
-        break;
-      case "spell":
-        this.addSpellTag(data);
-        break;
-      default:
-        // nothing
-        break;
+  // ─────────────────────────────────────────────
+  // Type overlays
+  // ─────────────────────────────────────────────
+  _buildTypeOverlay(data) {
+    if (data.type === "creature") {
+      const y = this.cardHeight / 2 - 16;
+
+      const bar = this.scene.add
+        .rectangle(0, y, this.cardWidth - 8, 18, 0x000000, 0.45)
+        .setOrigin(0.5);
+
+      const atkText = this.scene.add
+        .text(-this.cardWidth / 2 + 5, y, `⚔️${data.attack ?? "?"}`, {
+          fontSize: "13px",
+          color: "#ffffff",
+        })
+        .setOrigin(0, 0.5);
+
+      const hpText = this.scene.add
+        .text(this.cardWidth / 2 - 5, y, `❤️${data.health ?? "?"}`, {
+          fontSize: "13px",
+          color: "#ffffff",
+        })
+        .setOrigin(1, 0.5);
+
+      this.add([bar, atkText, hpText]);
+
+      this.atkText = atkText;
+      this.hpText = hpText;
+    } else {
+      const y = this.cardHeight / 2 - 16;
+      let label = "SPELL";
+      if (data.damage != null) label = `DMG ${data.damage}`;
+      if (data.heal != null) label = `HEAL ${data.heal}`;
+
+      const tag = this.scene.add
+        .text(0, y, label, {
+          fontSize: "13px",
+          color: "#ffe066",
+          backgroundColor: "#00000099",
+          padding: { x: 4, y: 2 },
+        })
+        .setOrigin(0.5);
+
+      this.add(tag);
+      this.spellTag = tag;
     }
   }
 
-  addAtkDefText(atk = "?", hp = "?") {
-    const barY = this.cardHeight / 2 - 16;
-
-    const bar = this.scene.add
-      .rectangle(0, barY, this.cardWidth - 8, 18, 0x000000, 0.45)
-      .setOrigin(0.5);
-
-    const atkText = this.scene.add
-      .text(-this.cardWidth / 2 + 5, barY, `⚔️${atk}`, {
-        fontSize: 14,
-        color: "#fff",
-      })
-      .setOrigin(0, 0.5);
-
-    const hpText = this.scene.add
-      .text(this.cardWidth / 2 - 5, barY, `❤️${hp}`, {
-        fontSize: 14,
-        color: "#fff",
-      })
-      .setOrigin(1, 0.5);
-
-    this.add([bar, atkText, hpText]);
-
-    this.atkText = atkText;
-    this.hpText = hpText;
+  // ─────────────────────────────────────────────
+  // Public setters (used by your Board/UI code)
+  // ─────────────────────────────────────────────
+  setHp(v) {
+    if (this.hpText) this.hpText.setText(`❤️${v}`);
   }
-
-  addSpellTag(data) {
-    // Choose what to show: damage or heal
-    let text = "";
-    if (data.damage != null) text = `DMG ${data.damage}`;
-    if (data.heal != null) text = `HEAL ${data.heal}`;
-    if (!text) text = "SPELL";
-
-    const tag = this.scene.add
-      .text(0, this.cardHeight / 2 - 16, text, {
-        fontSize: 13,
-        color: "#ffe066",
-        backgroundColor: "#00000099",
-        padding: { x: 4, y: 2 },
-      })
-      .setOrigin(0.5);
-
-    this.add(tag);
-    this.spellTag = tag;
+  setAtk(v) {
+    if (this.atkText) this.atkText.setText(`⚔️${v}`);
+  }
+  setStats(atk, hp) {
+    if (atk != null) this.setAtk(atk);
+    if (hp != null) this.setHp(hp);
+  }
+  setCost(cost) {
+    if (!this.costText) return;
+    this.costText.setText(String(cost));
+    const r = 11;
+    const maxW = r * 1.6;
+    const b = this.costText.getBounds();
+    if (b.width > maxW && b.width > 0) {
+      this.costText.setScale(maxW / b.width);
+    } else {
+      this.costText.setScale(1);
+    }
+  }
+  setSpellValue(val, kind) {
+    if (!this.spellTag) return;
+    this.spellTag.setText(kind === "heal" ? `HEAL ${val}` : `DMG ${val}`);
   }
 
   highlight(on) {
     if (on) {
       if (this.hlGfx) return;
-      const w = this.cardWidth,
-        h = this.cardHeight;
-      const g = this.scene.add.graphics();
-      g.lineStyle(4, 0xffff00).strokeRoundedRect(
-        -w / 2 - 4,
-        -h / 2 - 4,
-        w + 8,
-        h + 8,
-        6
-      );
-      this.addAt(g, 0); // behind
-      this.hlGfx = g;
+      this.hlGfx = this._drawOutline(PlaceholderCard.COLORS.selectOutline, 4);
       this.setScale(1.05);
     } else {
       this.setScale(1);
-      this.hlGfx?.destroy();
+      if (this.hlGfx) this.hlGfx.destroy();
       this.hlGfx = null;
     }
   }
 
-  // optional: if you want to swap art later
-  setTexture(textureKey) {
-    // remove old bg, add image, etc.
+  setAttackable(on) {
+    if (on) {
+      if (this.attackableGfx || this.hlGfx) return;
+      this.attackableGfx = this._drawOutline(
+        PlaceholderCard.COLORS.attackableOutline,
+        3
+      );
+    } else {
+      if (this.attackableGfx) this.attackableGfx.destroy();
+      this.attackableGfx = null;
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────
+  _drawOutline(color, width) {
+    const g = this.scene.add.graphics();
+    g.lineStyle(width, color, 1);
+    g.strokeRoundedRect(
+      -this.cardWidth / 2 - 3,
+      -this.cardHeight / 2 - 3,
+      this.cardWidth + 6,
+      this.cardHeight + 6,
+      PlaceholderCard.CORNER + 2
+    );
+    this.addAt(g, 100); // above art/glass
+    return g;
   }
 }

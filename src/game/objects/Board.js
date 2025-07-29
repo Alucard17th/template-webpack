@@ -3,8 +3,8 @@ import { PlaceholderCard } from "../objects/PlaceholderCard";
 import { CARDS, CARDS_BY_ID } from "../../data/cards";
 
 const CARD_W = 80;
-const CARD_SPACING = 90;
-const ROW_PADDING_Y = 113;
+const CARD_SPACING = 110;
+const ROW_GAP_RATIO = 0.16;
 
 export class Board extends Phaser.GameObjects.Group {
   constructor(scene, playerId, isMe, oppState) {
@@ -17,14 +17,16 @@ export class Board extends Phaser.GameObjects.Group {
 
     this.group = scene.add.group();
 
+    const h = scene.scale.height;
+    const gap = Math.round(h * ROW_GAP_RATIO);
     // Row Y positions:
     if (isMe) {
-      this.creaturesY = 460;                     // my top row
-      this.spellsY = this.creaturesY + ROW_PADDING_Y;
+      this.creaturesY = Math.round(h * 0.59); // bottom side top row
+      this.spellsY = this.creaturesY + gap; // under it
       this.orderTop = "creature";
     } else {
-      this.spellsY = 210;                        // opponent top row
-      this.creaturesY = this.spellsY + ROW_PADDING_Y;
+      this.spellsY = Math.round(h * 0.25); // top side top row
+      this.creaturesY = this.spellsY + gap; // under it
       this.orderTop = "spell";
     }
 
@@ -36,7 +38,7 @@ export class Board extends Phaser.GameObjects.Group {
 
   /** ids MUST be UIDs like "005#17" */
   render(ids) {
-    console.log('[Board] render()', ids);
+    console.log("[Board] render()", ids);
     if (!ids || !this.group) return;
 
     this.group.clear(true, true);
@@ -87,7 +89,7 @@ export class Board extends Phaser.GameObjects.Group {
       const data = CARDS_BY_ID[baseId] || {};
 
       // Pass uid to card
-    //   console.log('rendering', baseId, uid);
+      //   console.log('rendering', baseId, uid);
       const card = new PlaceholderCard(this.scene, baseId, fx, y, uid);
       card.setDepth(depth);
       this.group.add(card);
@@ -133,7 +135,11 @@ export class Board extends Phaser.GameObjects.Group {
   updateHpTexts(hpMap) {
     this.group.getChildren().forEach((card) => {
       // accept container or child; prefer tag
-      const c = card?.isCard ? card : card?.parentContainer?.isCard ? card.parentContainer : null;
+      const c = card?.isCard
+        ? card
+        : card?.parentContainer?.isCard
+        ? card.parentContainer
+        : null;
       if (!c) return;
 
       const baseId = c.cardId;
@@ -167,7 +173,13 @@ export class Board extends Phaser.GameObjects.Group {
     });
   }
 
-  _strokeDashed(g, x1, y, x2, { color = 0xffffff, width = 2, dash = 10, gap = 6 } = {}) {
+  _strokeDashed(
+    g,
+    x1,
+    y,
+    x2,
+    { color = 0xffffff, width = 2, dash = 10, gap = 6 } = {}
+  ) {
     g.lineStyle(width, color, 1);
     let x = x1;
     while (x < x2) {
@@ -180,15 +192,43 @@ export class Board extends Phaser.GameObjects.Group {
     }
   }
 
+  /** Show green outline on cards that can attack this turn */
+  setAttackable(actedMap = {}, myTurn = false) {
+    this.group.getChildren().forEach((card) => {
+      if (!(card instanceof PlaceholderCard)) return;
+
+      // Default: clear
+      let attackable = false;
+
+      if (myTurn && this.isMe) {
+        const data = CARDS_BY_ID[card.cardId];
+        if (!actedMap[card.uid]) {
+          // Allow creatures and spells on board to "attack/cast"
+          if (data?.type === "creature") attackable = true;
+          else if (data?.type === "spell") attackable = true; // you already allow board spells to act
+        }
+      }
+
+      // Never show green if it's currently yellow-selected
+      card.setAttackable(attackable && !card.hlGfx);
+    });
+  }
+
+  /** When turn switches or state changes, clear any green outlines */
+  clearAttackable() {
+    this.group.getChildren().forEach((card) => {
+      if (card instanceof PlaceholderCard) card.setAttackable(false);
+    });
+  }
+
   /** Accept container or child */
   contains(obj) {
     if (!this.group) return false;
-    const card =
-      obj?.isCard
-        ? obj
-        : obj?.parentContainer?.isCard
-        ? obj.parentContainer
-        : null;
+    const card = obj?.isCard
+      ? obj
+      : obj?.parentContainer?.isCard
+      ? obj.parentContainer
+      : null;
     if (!card) return false;
     return this.group.contains(card);
   }

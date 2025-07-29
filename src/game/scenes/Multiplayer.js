@@ -18,21 +18,53 @@ import { buildDeck } from "../../helpers/deckUtils";
 const AVATAR_W = 50;
 const AVATAR_H = 50;
 const BOTTOM_Y = 0 + AVATAR_H;
-const TOP_Y = 768 - AVATAR_H;
+const TOP_Y = 1080 - AVATAR_H;
 const LEFT_X = 0 + AVATAR_W;
-const RIGHT_X = 1024 - AVATAR_W;
+const RIGHT_X = 1920 - AVATAR_W;
 
 const MANA_POINTS = 10;
-const HEALTH_POINTS = 100;
+const HEALTH_POINTS = 10;
 const HP_BAR_W = 360;
 const HP_BAR_H = 15;
 
 const START_HAND_SIZE = 5;
-const MY_START_HAND_Y_POSITION = 700;
+const MY_START_HAND_Y_POSITION = 985;
 const OPP_START_HAND_Y_POSITION = 80;
 const HP_MANA_BAR_START_X_TUNER = 240;
 
 const DECK_COPIES = 8;
+
+const TURN_TEXT_Y = 1720;
+
+function hexToInt(hex) {
+  try {
+    return Phaser.Display.Color.HexStringToColor(hex).color;
+  } catch {
+    return 0xffffff;
+  }
+}
+
+function loadBase64Texture(scene, key, dataUrl) {
+  return new Promise((resolve, reject) => {
+    if (!dataUrl) return reject(new Error("No dataUrl"));
+    if (scene.textures.exists(key)) return resolve(scene.textures.get(key));
+
+    // Use an HTMLImage and add it when loaded
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        // This creates a Phaser texture from the decoded image
+        scene.textures.addImage(key, img);
+        resolve(scene.textures.get(key));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.onerror = (e) => reject(e);
+    img.src = dataUrl; // supports data:image/svg+xml, data:image/png, etc.
+  });
+}
 
 export class Multiplayer extends Phaser.Scene {
   players = [];
@@ -44,6 +76,24 @@ export class Multiplayer extends Phaser.Scene {
   lastOppBoardStr = "";
   lastMyBoardStateStr = "";
   lastOppBoardStateStr = "";
+
+  preload() {
+    // load every card image
+    CARDS.forEach((c) => {
+      const key = c.frame; // e.g., "001_goblin"
+      const url = `/assets/cards/${key}.png`; // served from /public
+      if (!this.textures.exists(key)) {
+        this.load.image(key, url);
+      }
+    });
+
+    // this.load.once("complete", () => {
+    //   console.log(
+    //     "[preload] loaded card textures:",
+    //     CARDS.map((c) => c.frame)
+    //   );
+    // });
+  }
 
   create() {
     this.screenMiddle = (this.scale.width - HP_BAR_W) / 2;
@@ -63,9 +113,12 @@ export class Multiplayer extends Phaser.Scene {
     this.lastMyMana = -1;
     this.lastOppMana = -1;
 
+    this.createFaceZones();
     // 1. Handle players joining and quitting.
     onPlayerJoin((ps) => {
       this.addPlayer(ps); // keep your sprite code
+
+      console.log(ps.state.profile);
 
       if (ps.id !== me().id) {
         this.oppState = ps; // remember opponent
@@ -90,7 +143,7 @@ export class Multiplayer extends Phaser.Scene {
     this.input.on("pointerup", () => myPlayer().setState("dir", undefined));
 
     /* ─── TURN TEXT ─────────────────────────────────────────────── */
-    this.turnText = this.add.text(810, 550, "", {
+    this.turnText = this.add.text(TURN_TEXT_Y, 550, "", {
       fontSize: 22,
       fontFamily: 'Georgia, "Goudy Bookletter 1911", Times, serif',
       align: "justify",
@@ -101,19 +154,21 @@ export class Multiplayer extends Phaser.Scene {
       const current = getState("turnPlayerId");
       if (!current) return;
       const mine = myPlayer()?.id;
-      this.turnText.setText(current === mine ? "Your Turn" : "Opponent Turn");
+      const myTurn = current === mine;
 
-      // toggle button visibility
-      this.endBtn.setVisible(current === mine);
+      this.turnText.setText(myTurn ? "Your Turn" : "Opponent Turn");
+      this.endBtn.setVisible(myTurn);
+
+      // quick clear of green outlines; update() will re-apply correct ones
+      this.myBoard?.clearAttackable();
+      this.oppBoard?.clearAttackable();
     };
 
     // run every 100 ms (cheap and simple)
     this.time.addEvent({ delay: 100, loop: true, callback: updateTurnUI });
 
     /* ─── END TURN BUTTON ───────────────────────────────────────── */
-    this.endBtn = this.ui.createEndTurnButton();
-    // this.endBtn = this.createEndTurnButton();
-    // this.endBtn.setVisible(false); // hidden until it's your turn
+    this.endBtn = this.ui.createEndTurnButton(TURN_TEXT_Y + 50);
 
     if (isHost()) {
       this.reqTimer = setInterval(this.processRequests, 50); // 20Hz
@@ -141,35 +196,164 @@ export class Multiplayer extends Phaser.Scene {
       console.log("[Multiplayer] calling initAttackSelection()");
       this.initAttackSelection();
     });
-    // this.initAttackSelection();
   }
 
   addPlayer(playerState) {
-    // pick row: me at bottom, others at top
     const isMe = playerState.id === me().id;
-    const startX = isMe ? LEFT_X : RIGHT_X;
+    const startX = isMe ? LEFT_X : RIGHT_X - AVATAR_W / 2;
     const startY = isMe ? BOTTOM_Y : TOP_Y;
-    const color = isMe ? 0xff0000 : 0x0000ff;
 
-    const rect = this.add
-      .rectangle(startX, startY, AVATAR_W, AVATAR_H, color)
+    const profile = playerState.state?.profile ?? {};
+    const name = profile.name || (isMe ? "You" : "Opponent");
+    const ringColor = hexToInt(profile.color || "#ffffff");
+    const photo = profile.photo;
+    const texKey = `avatar_${playerState.id}`;
+
+    // --- placeholder circle we will swap later ---
+    let sprite = this.add
+      .circle(startX, startY, AVATAR_W / 2, 0x444444)
       .setOrigin(0.5);
 
-    this.physics.add.existing(rect);
-    rect.body.setCollideWorldBounds(true);
+    // circular mask geometry (reused after swap)
+    const maskG = this.add.graphics();
+    maskG.fillStyle(0xffffff, 1).fillCircle(startX, startY, AVATAR_W / 2);
+    const mask = maskG.createGeometryMask();
+    sprite.setMask(mask);
 
-    /* store a mirror flag so update() knows whether to flip X */
-    this.players.push({
-      sprite: rect,
+    // ring
+    const ring = this.add.graphics();
+    ring
+      .lineStyle(4, ringColor, 1)
+      .strokeCircle(startX, startY, AVATAR_W / 2 + 1);
+
+    // name
+    const labelY = isMe
+      ? startY + AVATAR_H / 2 + 12
+      : startY - AVATAR_H / 2 - 12;
+    const nameText = this.add
+      .text(startX, labelY, name, {
+        fontSize: 16,
+        color: "#ffffff",
+        fontStyle: "bold",
+        stroke: profile.color ? profile.color : "#000000",
+        strokeThickness: profile.color ? 0 : 2,
+      })
+      .setOrigin(0.5, isMe ? 0 : 1);
+
+    const bgPadX = 6,
+      bgPadY = 2;
+    const bounds = nameText.getBounds();
+    const nameBg = this.add
+      .rectangle(
+        bounds.centerX,
+        bounds.centerY,
+        bounds.width + bgPadX * 2,
+        bounds.height + bgPadY * 2,
+        0x000000,
+        0.45
+      )
+      .setOrigin(0.5);
+    this.children.moveBelow(nameBg, nameText);
+
+    // physics (optional)
+    this.physics.add.existing(sprite);
+    sprite.body.setCircle((AVATAR_W / 2) * (sprite.scaleX || 1));
+    sprite.body.setCollideWorldBounds(true);
+
+    // keep references
+    const entry = {
+      sprite,
+      ring,
+      maskG,
+      mask,
+      nameText,
+      nameBg,
       state: playerState,
-      mirror: !isMe, // true for opponent row
-    });
+      mirror: !isMe,
+      destroy() {
+        sprite.destroy();
+        ring.destroy();
+        maskG.destroy();
+        nameText.destroy();
+        nameBg.destroy();
+      },
+    };
+    this.players.push(entry);
 
-    /* cleanup on quit */
+    // --- Load and swap in the real image asynchronously ---
+    if (photo) {
+      loadBase64Texture(this, texKey, photo)
+        .then((texture) => {
+          // create image sprite
+          const img = this.add.image(startX, startY, texKey).setOrigin(0.5);
+          // fit into box
+          const src = texture.getSourceImage();
+          const scale = Math.min(AVATAR_W / src.width, AVATAR_H / src.height);
+          img.setScale(scale);
+          img.setMask(mask);
+
+          // replace placeholder in entry
+          // keep depth similar to the old circle
+          img.setDepth(entry.sprite.depth);
+          entry.sprite.destroy();
+          entry.sprite = img;
+
+          // re-add physics if you need it on the new sprite
+          this.physics.add.existing(img);
+          img.body.setCircle((AVATAR_W / 2) * (img.scaleX || 1));
+          img.body.setCollideWorldBounds(true);
+
+          console.log(
+            "[Multiplayer] avatar image ready:",
+            texKey,
+            src.width,
+            src.height
+          );
+        })
+        .catch((err) => {
+          console.warn("[Multiplayer] avatar load failed:", err);
+        });
+    } else {
+      console.log("[Multiplayer] no photo provided for", playerState.id);
+    }
+
+    // cleanup on quit
     playerState.onQuit(() => {
-      rect.destroy();
+      entry.destroy?.();
       this.players = this.players.filter((p) => p.state !== playerState);
+      if (this.textures.exists(texKey)) this.textures.remove(texKey);
     });
+  }
+
+  createFaceZones() {
+    const w = this.scale.width;
+    const padX = 80; // keep away from edges
+    const zoneW = w - padX * 2;
+    const zoneH = 140; // height of the clickable band
+
+    const startX = LEFT_X;
+
+    // Opponent face zone near the top
+    const oppY = 60; // adjust to taste
+    this.oppFaceZone = this.add
+      .zone(startX, oppY, AVATAR_W * 1.8, AVATAR_H * 1.8)
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.oppFaceZone.isFace = true;
+    this.oppFaceZone.owner = "opponent";
+
+    // Player face zone near the bottom (for self‑heal)
+    const myY = this.scale.height - 100;
+    this.myFaceZone = this.add
+      .zone(w / 2, myY, zoneW, zoneH)
+      .setOrigin(0.5)
+      .setInteractive();
+    this.myFaceZone.isFace = true;
+    this.myFaceZone.owner = "me";
+
+    // optional: very light debug outlines
+    const g = this.add.graphics().setDepth(9999);
+    g.lineStyle(1, 0xff0000, 0.4).strokeRectShape(this.oppFaceZone.getBounds());
   }
 
   dealOpeningHands() {
@@ -248,7 +432,7 @@ export class Multiplayer extends Phaser.Scene {
       const card = new PlaceholderCard(
         this,
         baseId,
-        this.screenMiddle + idx * 85,
+        this.screenMiddle + idx * 110,
         MY_START_HAND_Y_POSITION,
         uid
       );
@@ -293,50 +477,13 @@ export class Multiplayer extends Phaser.Scene {
 
   processRequests = () => {
     if (!isHost()) return;
+    if (getState("gameOver")) return;
+
     for (const p of this.roster) {
       const req = p.getState("request");
       if (!req) continue;
 
       /* ---- PLAY CARD ---- */
-      // if (req.play) {
-      //   const hand = p.getState("hand") || [];
-      //   const board = p.getState("board") || [];
-      //   const uid = req.play;
-      //   const idx = hand.indexOf(req.play);
-      //   const card = CARDS.find((c) => c.id === req.play);
-      //   const cost = card?.cost ?? 0;
-      //   const mana = p.getState("mana") ?? 0;
-
-      //   if (getState("turnPlayerId") !== p.id) {
-      //     p.setState("request", null);
-      //     continue;
-      //   }
-      //   if (mana < cost) {
-      //     p.setState("reject", { reason: "mana", card: req.play }, true);
-      //     p.setState("request", null);
-      //     continue;
-      //   }
-
-      //   p.setState("mana", mana - cost, true);
-
-      //   if (idx !== -1) {
-      //     hand.splice(idx, 1);
-      //     board.push(req.play);
-      //     p.setState("hand", hand, true);
-      //     p.setState("board", board, true);
-
-      //     const cardData = CARDS.find((c) => c.id === req.play);
-      //     if (cardData?.type === "creature") {
-      //       const bs = p.getState("boardState") || {};
-      //       bs[req.play] = cardData.health; // initial HP
-      //       p.setState("boardState", bs, true);
-      //     }
-      //   }
-
-      //   p.setState("request", null);
-      //   continue;
-      // }
-
       if (req.play) {
         const hand = p.getState("hand") || [];
         const board = p.getState("board") || [];
@@ -382,96 +529,131 @@ export class Multiplayer extends Phaser.Scene {
       }
 
       /* ---- ATTACK ---- */
-      // if (req.attack) {
-      //   const { src, dst } = req.attack;
-
-      //   // basic validation
-      //   if (getState("turnPlayerId") !== p.id) {
-      //     p.setState("request", null);
-      //     continue;
-      //   }
-
-      //   const myBoard = p.getState("board") || [];
-      //   if (!myBoard.includes(src)) {
-      //     p.setState("request", null);
-      //     continue;
-      //   }
-
-      //   const foe = this.roster.find((r) => r.id !== p.id);
-      //   const foeBoard = foe.getState("board") || [];
-
-      //   // check target exists
-      //   if (dst !== "player" && !foeBoard.includes(dst)) {
-      //     p.setState("request", null);
-      //     continue;
-      //   }
-
-      //   /* ---------------------------------
-      //    * apply damage
-      //    * --------------------------------*/
-      //   const srcCard = CARDS.find((c) => c.id === src);
-      //   const dmg = srcCard.attack ?? 0;
-
-      //   if (dst === "player") {
-      //     const hp = foe.getState("hp") ?? 0;
-      //     foe.setState("hp", Math.max(0, hp - dmg), true);
-      //   } else {
-      //     const dstCard = CARDS.find((c) => c.id === dst);
-      //     // creature‑vs‑creature: deal damage both ways
-      //     this.applyCreatureDamage(src, dst, p, foe, srcCard, dstCard);
-      //   }
-
-      //   p.setState("request", null);
-      //   continue;
-      // }
-
       if (req.attack) {
-        const { src, dst } = req.attack; // both uids or dst === "player"
-
-        if (getState("turnPlayerId") !== p.id) {
+        const { src, dst } = req.attack; // uids or dst === "player"
+        const turnOk = getState("turnPlayerId") === p.id;
+        if (!turnOk) {
+          console.log("[attack] rejected: not your turn");
           p.setState("request", null);
           continue;
         }
 
         const myBoard = p.getState("board") || [];
+        const foe = this.roster.find((r) => r.id !== p.id);
+        const foeBoard = foe.getState("board") || [];
+
         if (!myBoard.includes(src)) {
+          console.log("[attack] rejected: src not on my board", src, myBoard);
           p.setState("request", null);
           continue;
         }
 
-        const foe = this.roster.find((r) => r.id !== p.id);
-        const foeBoard = foe.getState("board") || [];
-        if (dst !== "player" && !foeBoard.includes(dst)) {
-          p.setState("request", null);
-          continue;
+        /* ---------- one‑attack‑per‑turn gate ---------- */
+        {
+          const acted = p.getState("hasAttacked") || {};
+          if (acted[src]) {
+            p.setState("reject", { reason: "exhausted", src }, true);
+            p.setState("request", null);
+            continue;
+          }
         }
+        /* --------------------------------------------- */
 
         const srcBase = src.split("#")[0];
         const srcData = CARDS.find((c) => c.id === srcBase);
-
         if (!srcData) {
+          console.log("[attack] rejected: unknown src card", srcBase);
           p.setState("request", null);
           continue;
         }
 
-        if (srcData.type === "spell") {
-          // resolve spell
-          this.resolveSpellAttack(p, foe, src, dst, srcData);
-        } else {
-          // creature attack
-          const dstBase = dst === "player" ? null : dst.split("#")[0];
-          if (dst === "player") {
-            const dmg = srcData.attack ?? 0;
+        const isCreature = srcData.type === "creature";
+        const isHealSpell = srcData.type === "spell" && (srcData.heal ?? 0) > 0;
+        const isDamageSpell =
+          srcData.type === "spell" && (srcData.damage ?? 0) > 0;
+
+        if (dst === "player") {
+          if (isHealSpell) {
+            // self-heal (attacker’s player)
+            const hp = p.getState("hp") ?? 0;
+            p.setState(
+              "hp",
+              Math.min(HEALTH_POINTS, hp + (srcData.heal ?? 0)),
+              true
+            );
+          } else {
+            // damage to opponent face ONLY if they have no creatures
+            const foeBoard = foe.getState("board") || [];
+            if (foeBoard.length > 0) {
+              // reject: taunt-like rule — creatures present, face is protected
+              p.setState("reject", { reason: "protectedFace" }, true);
+              p.setState("request", null);
+              continue;
+            }
+            const dmg = isCreature ? srcData.attack ?? 0 : srcData.damage ?? 0;
             const hp = foe.getState("hp") ?? 0;
             foe.setState("hp", Math.max(0, hp - dmg), true);
-          } else {
+            this.time.delayedCall(0, () => this.checkGameOver());
+          }
+
+          // mark as used
+          const acted = p.getState("hasAttacked") || {};
+          acted[src] = true;
+          p.setState("hasAttacked", acted, true);
+
+          p.setState("request", null);
+          continue;
+        } else {
+          const targetOnMySide = myBoard.includes(dst);
+          const targetOnFoeSide = foeBoard.includes(dst);
+
+          if (isHealSpell) {
+            if (!targetOnMySide) {
+              console.log("[attack] rejected: heal must target friendly", {
+                dst,
+                myBoard,
+              });
+              p.setState("request", null);
+              continue;
+            }
+            console.log("[attack] HEAL → friendly unit", { src, dst });
+            this.resolveSpellAttack(p, foe, src, dst, srcData);
+
+            // mark as used
+            const acted = p.getState("hasAttacked") || {};
+            acted[src] = true;
+            p.setState("hasAttacked", acted, true);
+
+            p.setState("request", null);
+            continue;
+          }
+
+          if (!targetOnFoeSide) {
+            console.log("[attack] rejected: offensive must target enemy", {
+              dst,
+              foeBoard,
+            });
+            p.setState("request", null);
+            continue;
+          }
+
+          console.log("[attack] src/dst", src, dst);
+          if (isCreature) {
+            const dstBase = dst.split("#")[0];
             const dstData = CARDS.find((c) => c.id === dstBase);
             this.applyCreatureDamage(src, dst, p, foe, srcData, dstData);
+          } else if (isDamageSpell) {
+            this.resolveSpellAttack(p, foe, src, dst, srcData);
           }
-        }
 
-        p.setState("request", null);
-        continue;
+          // mark as used
+          const acted = p.getState("hasAttacked") || {};
+          acted[src] = true;
+          p.setState("hasAttacked", acted, true);
+
+          p.setState("request", null);
+          continue;
+        }
       }
 
       /* ---- END TURN ---- */
@@ -492,6 +674,11 @@ export class Multiplayer extends Phaser.Scene {
     const newMax = Math.min(curMax + 1, MANA_POINTS);
     pState.setState("maxMana", newMax, true);
     pState.setState("mana", newMax, true);
+
+    const boardUids = pState.getState("board") || [];
+    const reset = {};
+    for (const uid of boardUids) reset[uid] = false;
+    pState.setState("hasAttacked", reset, true);
 
     // 2) draw one card
     const logic = this.logicById.get(pState.id);
@@ -531,6 +718,10 @@ export class Multiplayer extends Phaser.Scene {
     //   this.renderHand(ps.getState("hand"));
     // }
 
+    const myTurn = getState("turnPlayerId") === myPlayer().id;
+    const actedMap = ps.getState("hasAttacked") || {};
+    this.myBoard?.setAttackable(actedMap, myTurn);
+
     if (this.oppState && this.oppState.getState("handReady")) {
       const oppHand = this.oppState.getState("hand") || [];
       const s = JSON.stringify(oppHand);
@@ -549,6 +740,10 @@ export class Multiplayer extends Phaser.Scene {
         this.lastOppBoardStr = so;
         this.renderBoard(this.oppState.id, oppBoard);
       }
+
+      const oppActed = this.oppState.getState("hasAttacked") || {};
+      const oppTurn = getState("turnPlayerId") === this.oppState.id;
+      this.oppBoard?.setAttackable(oppActed, oppTurn);
     }
 
     const myBoard = ps.getState("board") || [];
@@ -564,7 +759,7 @@ export class Multiplayer extends Phaser.Scene {
       this.lastMyHp = myHp;
       const hpPos = this.ui.drawHpBar(
         this.screenMiddle - HP_MANA_BAR_START_X_TUNER,
-        700,
+        965,
         myHp,
         HEALTH_POINTS,
         true
@@ -596,7 +791,7 @@ export class Multiplayer extends Phaser.Scene {
       this.lastMyMana = myMana;
       const mpPos = this.ui.drawManaBar(
         this.screenMiddle - HP_MANA_BAR_START_X_TUNER,
-        720,
+        985,
         myMana,
         MANA_POINTS,
         true
@@ -624,13 +819,54 @@ export class Multiplayer extends Phaser.Scene {
       }
     }
 
+    // --------------------------------------------------
+    //  Show end‑of‑game overlay once, when it appears
+    // --------------------------------------------------
+    if (!this.gameOverShown && getState("gameOver")) {
+      this.gameOverShown = true;
+
+      const winnerId = getState("gameOver").winnerId;
+      const iWon = winnerId === myPlayer().id;
+      const msg = iWon ? "YOU WIN!" : "YOU LOSE";
+
+      const overlay = this.add
+        .rectangle(
+          this.scale.width / 2,
+          this.scale.height / 2,
+          600,
+          240,
+          0x000000,
+          0.8
+        )
+        .setOrigin(0.5)
+        .setDepth(200000);
+
+      const text = this.add
+        .text(this.scale.width / 2, this.scale.height / 2, msg, {
+          fontSize: 72,
+          color: "#ffffff",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5)
+        .setDepth(200001);
+
+      // optional: stop pointer events completely
+      this.input.enabled = false;
+    }
+
+    if (getState("gameOver")) return;
+
     /* ---- REJECTS ---- */
     const rej = ps.getState("reject");
     if (rej) {
       if (rej.reason === "mana") {
-        this.ui.flashManaBar(this.screenMiddle, 720); // visual cue
+        this.ui.flashManaBar(); // visual cue
         this.ui.toast("Not enough mana!");
         // this.shakeCardInHand(rej.card);
+      } else if (rej.reason === "exhausted") {
+        this.ui.toast("That card already attacked this turn.");
+      } else if (rej.reason === "protectedFace") {
+        this.ui.toast("You must clear enemy creatures before attacking face.");
       }
       ps.setState("reject", null); // clear it
     }
@@ -666,10 +902,48 @@ export class Multiplayer extends Phaser.Scene {
     this.pendingAttacker = null;
 
     this.input.on("gameobjectup", (pointer, obj) => {
-      // Accept either the container or a child promoted via input; climb to parent with isCard if needed
       let card = obj;
+
+      // Allow face zones
+      if (obj?.isFace) {
+        // if first click not chosen yet, ignore
+        if (!this.pendingAttacker) return;
+
+        const atkData = CARDS_BY_ID[this.pendingAttacker.cardId];
+        const isHealSpell =
+          atkData?.type === "spell" && (atkData.heal ?? 0) > 0;
+        const isDamageOrCreature = !isHealSpell;
+
+        if (obj.owner === "me") {
+          // clicking my face: allow only HEAL spells
+          if (!isHealSpell) {
+            this.ui.toast("You can only heal your own player.");
+            return;
+          }
+          this.sendAttackRequest(this.pendingAttacker.uid, "player");
+          this.pendingAttacker.highlight(false);
+          this.pendingAttacker = null;
+          return;
+        }
+
+        if (obj.owner === "opponent") {
+          // clicking opponent face
+          if (!isDamageOrCreature) {
+            this.ui.toast("Healing the enemy isn't allowed.");
+            return;
+          }
+          // We *try* to hit face; host will enforce "no creatures on foe board"
+          this.sendAttackRequest(this.pendingAttacker.uid, "player");
+          this.pendingAttacker.highlight(false);
+          this.pendingAttacker = null;
+          return;
+        }
+
+        return;
+      }
+
+      // ----- existing card-selection logic -----
       if (!(card && card.isCard)) {
-        // if a child was clicked, try its parent container
         if (card?.parentContainer && card.parentContainer.isCard) {
           card = card.parentContainer;
         } else {
@@ -677,62 +951,53 @@ export class Multiplayer extends Phaser.Scene {
         }
       }
 
-      /* -------------------- FIRST CLICK -------------------- */
+      // FIRST CLICK
       if (!this.pendingAttacker) {
         const myTurn = getState("turnPlayerId") === myPlayer().id;
         const onMyBoard = this.myBoard?.contains(card);
-        // logs to verify path
-        console.log("[click-first]", { myTurn, onMyBoard, card: card.cardId });
-
         if (!myTurn || !onMyBoard) return;
 
+        const acted = myPlayer().getState("hasAttacked") || {};
+        if (acted[card.uid]) {
+          this.ui.toast("This card already attacked.");
+          return;
+        }
+
         this.pendingAttacker = card;
+        card.setAttackable(false);
         card.highlight(true);
         this.ui.toast("Choose a target");
         return;
       }
 
-      /* ------------------- SECOND CLICK -------------------- */
+      // SECOND CLICK on a card (your previous logic)
       const clickedMyBoard = this.myBoard?.contains(card);
-      const atkBaseId = this.pendingAttacker.cardId; // base id
+      const atkBaseId = this.pendingAttacker.cardId;
       const atkData = CARDS_BY_ID[atkBaseId];
       const isCreature = atkData?.type === "creature";
       const isHealSpell = atkData?.type === "spell" && (atkData.heal ?? 0) > 0;
-      const isDamageSpell =
-        atkData?.type === "spell" && (atkData.damage ?? 0) > 0;
-
-      console.log("[click-second]", {
-        clickedMyBoard,
-        atkBaseId,
-        isHealSpell,
-        isDamageSpell,
-      });
 
       if (clickedMyBoard) {
-        // You clicked your own side
         if (isHealSpell) {
-          // ✅ allowed: heal friendly creature (or later: 'player')
           this.sendAttackRequest(this.pendingAttacker.uid, card.uid);
           this.pendingAttacker.highlight(false);
           this.pendingAttacker = null;
           return;
         }
-        // creatures & damage spells cannot target friendly board
         this.ui.toast("Cannot target your own card.");
         return;
       }
 
-      // You clicked opponent side
       if (isHealSpell) {
         this.ui.toast("Heal can only target friendly units.");
         return;
       }
 
-      // creatures and damage spells can hit enemy units
       this.sendAttackRequest(this.pendingAttacker.uid, card.uid ?? "player");
       this.pendingAttacker.highlight(false);
       this.pendingAttacker = null;
     });
+
     /* -------- Click on empty space  →  cancel selection ------ */
     this.input.on(
       "pointerdown",
@@ -792,6 +1057,14 @@ export class Multiplayer extends Phaser.Scene {
   }
 
   resolveSpellAttack(atkPS, defPS, srcUid, dstUidOrPlayer, spellData) {
+    console.log(
+      "resolveSpellAttack()",
+      atkPS,
+      defPS,
+      srcUid,
+      dstUidOrPlayer,
+      spellData
+    );
     const board = atkPS.getState("board") || [];
     const atkBoardState = atkPS.getState("boardState") || {};
     const defBoardState = defPS.getState("boardState") || {};
@@ -803,6 +1076,7 @@ export class Multiplayer extends Phaser.Scene {
       if (dstUidOrPlayer === "player") {
         const hp = defPS.getState("hp") ?? 0;
         defPS.setState("hp", Math.max(0, hp - damage), true);
+        this.checkGameOver();
       } else {
         const dstUid = dstUidOrPlayer;
         const dstBase = dstUid.split("#")[0];
@@ -842,6 +1116,8 @@ export class Multiplayer extends Phaser.Scene {
           const newHp = Math.min(dstData.health, cur + heal);
           atkBoardState[dstUid] = newHp;
           atkPS.setState("boardState", atkBoardState, true);
+
+          console.log("healing creature", dstUid, "from", cur, "to", newHp);
         }
       }
     }
@@ -849,5 +1125,18 @@ export class Multiplayer extends Phaser.Scene {
     // one-shot spell is consumed
     const newBoard = board.filter((u) => u !== srcUid);
     atkPS.setState("board", newBoard, true);
+  }
+
+  checkGameOver() {
+    if (!isHost()) return;
+
+    // who is alive?
+    const alive = this.roster.filter((p) => (p.getState("hp") ?? 0) > 0);
+
+    if (alive.length === 1) {
+      const winner = alive[0];
+      setState("gameOver", { winnerId: winner.id }, true); // broadcast
+      console.log("[GAME OVER] winner →", winner);
+    }
   }
 }
