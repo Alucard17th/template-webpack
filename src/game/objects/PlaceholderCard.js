@@ -50,10 +50,38 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
 
     // input on whole card (correct local coords)
     this.setSize(this.cardWidth, this.cardHeight);
-    this.setInteractive(
-      new Phaser.Geom.Rectangle(0, 0, this.cardWidth, this.cardHeight),
-      Phaser.Geom.Rectangle.Contains
-    );
+    this.setInteractive({
+      hitArea: new Phaser.Geom.Rectangle(0, 0, this.cardWidth, this.cardHeight),
+      hitAreaCallback: Phaser.Geom.Rectangle.Contains,
+      useHandCursor: true, // ← ✋ shows when hovered
+    });
+    const BASE_SCALE = 1; // normal size
+    const HOVER_SCALE = 1.25; // 25 % bigger
+    const ZOOM_MS = 150; // tween duration
+    // keep the depth you were created with so you can restore it later
+    this.baseDepth = this.depth;
+    // grow + bring to front
+    this.on("pointerover", () => {
+      this.setDepth(9999); // draw over everything
+      this.scene.tweens.add({
+        targets: this,
+        scale: HOVER_SCALE, // scaleX + scaleY together
+        duration: ZOOM_MS,
+        ease: "quad.out",
+        overwrite: true, // cancel previous tween
+      });
+    });
+    // shrink + put depth back
+    this.on("pointerout", () => {
+      this.scene.tweens.add({
+        targets: this,
+        scale: BASE_SCALE,
+        duration: ZOOM_MS,
+        ease: "quad.in",
+        overwrite: true,
+      });
+      this.setDepth(this.baseDepth);
+    });
 
     scene.add.existing(this);
 
@@ -171,7 +199,7 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
 
     const nameText = this.scene.add
       .text(0, yTop, data.name || "?", {
-        fontSize: "13px",
+        fontSize: "18px",
         color: "#ffffff",
         fontStyle: "bold",
         align: "center",
@@ -240,14 +268,14 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
 
       const atkText = this.scene.add
         .text(-this.cardWidth / 2 + 5, y, `⚔️${data.attack ?? "?"}`, {
-          fontSize: "13px",
+          fontSize: "24px",
           color: "#ffffff",
         })
         .setOrigin(0, 0.5);
 
       const hpText = this.scene.add
         .text(this.cardWidth / 2 - 5, y, `❤️${data.health ?? "?"}`, {
-          fontSize: "13px",
+          fontSize: "24px",
           color: "#ffffff",
         })
         .setOrigin(1, 0.5);
@@ -258,13 +286,13 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       this.hpText = hpText;
     } else {
       const y = this.cardHeight / 2 - 16;
-      let label = "SPELL";
+      let label = "XXXXX"; 
       if (data.damage != null) label = `DMG ${data.damage}`;
       if (data.heal != null) label = `HEAL ${data.heal}`;
 
       const tag = this.scene.add
         .text(0, y, label, {
-          fontSize: "13px",
+          fontSize: "24px",
           color: "#ffe066",
           backgroundColor: "#00000099",
           padding: { x: 4, y: 2 },

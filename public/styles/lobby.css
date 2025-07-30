@@ -1,0 +1,84 @@
+@font-face {
+  font-family: 'Constant';
+  src: url('../fonts/constan.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+/* ==== Layout ==== */
+.lobby-form {
+  position: absolute;
+  top: 50%;
+  left: 35%;
+  transform: translateY(-50%);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: sans-serif;
+  color: white;
+  font-family: 'Constant', sans-serif;
+}
+
+.roster-list {
+  position: absolute;
+  top: 50%;
+  right: 35%;
+  transform: translateY(-50%);
+  font-family: sans-serif;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  font-family: 'Constant', sans-serif;
+}
+
+/* ==== Input ==== */
+.lobby-input {
+  padding: 8px 16px;
+  border: none;
+  background: #333;
+  color: white;
+  border-radius: 6px;
+  font-family: 'Constant', sans-serif;
+}
+
+/* ==== Buttons ==== */
+.lobby-btn {
+  padding: 8px 16px;
+  font-weight: bold;
+  border: none;
+  background: #ccecb6;
+  color: #000;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+  font-family: 'Constant', sans-serif;
+}
+
+.lobby-btn:hover {
+  color: #fff;
+  background: #1e8523;
+}
+
+.lobby-btn.secondary {
+  background: #666;
+  font-family: 'Constant', sans-serif;
+}
+
+.lobby-btn.secondary:hover {
+  background: #444;
+}
+
+/* ==== Avatar ==== */
+.avatar-img {
+  border-radius: 50%;
+  margin: 10px auto;
+  border: 2px solid #fff;
+}
+
+.roster-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 5px 0;
+}

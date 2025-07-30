@@ -1,41 +1,57 @@
-import Phaser from "phaser";
+/*********************************************************************
+ *  Multiplayer.js  –  Phaser scene (presentation only)
+ *    ─ loads textures
+ *    ─ draws hands / boards / UI
+ *    ─ forwards “request” objects to the RequestQueue ⬅️  (THE brain)
+ *********************************************************************/
+
+import Phaser, { AUTO, Game } from "phaser";
 import {
   onPlayerJoin,
   isHost,
-  myPlayer,
   me,
+  myPlayer,
   setState,
   getState,
+  getParticipants,
 } from "playroomkit";
-import { Deck } from "../../logic/Deck";
-import { PlayerState } from "../../logic/PlayerState";
-import { CARDS, CARDS_BY_ID } from "../../data/cards";
-import { PlaceholderCard } from "../objects/PlaceholderCard";
-import { Board } from "../objects/Board";
-import { UI } from "../objects/UI";
-import { buildDeck } from "../../helpers/deckUtils";
+
+import { CARDS, CARDS_BY_ID } from "../../data/cards.js";
+import { buildDeck } from "../../helpers/deckUtils.js";
+import { Deck } from "../../logic/Deck.js";
+
+import { UI } from "../objects/UI.js";
+import { Board } from "../objects/Board.js";
+import { PlaceholderCard } from "../objects/PlaceholderCard.js";
+
+import {
+  START_HAND_SIZE,
+  DECK_COPIES,
+  MAX_MANA,
+  HEALTH_POINTS,
+  TICK_MS,
+} from "../core/constants.js";
+
+import { TurnManager } from "../core/TurnManager.js";
+import { RequestQueue } from "../core/RequestQueue.js";
+
+// ─────────────────────────────────────────────────────────────
+// Cosmetic constants (scene‑only — not needed by core logic)
+// ─────────────────────────────────────────────────────────────
+const WIDTH = 1920;
+const HEIGHT = 1080;
+
+const MY_HAND_Y = 985;
+const OPP_HAND_Y = 80;
+const BAR_SHIFT_X = 240;
 
 const AVATAR_W = 50;
 const AVATAR_H = 50;
-const BOTTOM_Y = 0 + AVATAR_H;
-const TOP_Y = 1080 - AVATAR_H;
-const LEFT_X = 0 + AVATAR_W;
-const RIGHT_X = 1920 - AVATAR_W;
-
-const MANA_POINTS = 10;
-const HEALTH_POINTS = 10;
-const HP_BAR_W = 360;
-const HP_BAR_H = 15;
-
-const START_HAND_SIZE = 5;
-const MY_START_HAND_Y_POSITION = 985;
-const OPP_START_HAND_Y_POSITION = 80;
-const HP_MANA_BAR_START_X_TUNER = 240;
-
-const DECK_COPIES = 8;
-
-const TURN_TEXT_Y = 1720;
-
+const BOTTOM_Y = HEIGHT - AVATAR_H - 30;
+const TOP_Y = AVATAR_H + 20;
+const LEFT_X = WIDTH / 3 - 250;
+const RIGHT_X = WIDTH / 3 - 250;
+// ─────────────────────────────────────────────────────────────
 function hexToInt(hex) {
   try {
     return Phaser.Display.Color.HexStringToColor(hex).color;
@@ -43,7 +59,6 @@ function hexToInt(hex) {
     return 0xffffff;
   }
 }
-
 function loadBase64Texture(scene, key, dataUrl) {
   return new Promise((resolve, reject) => {
     if (!dataUrl) return reject(new Error("No dataUrl"));
@@ -65,148 +80,329 @@ function loadBase64Texture(scene, key, dataUrl) {
     img.src = dataUrl; // supports data:image/svg+xml, data:image/png, etc.
   });
 }
+const FACE_ZONE_SCALE = 1.8; //  ➟  how wide the hit‑box is vs avatar
+function makeFaceZone(scene, sprite, owner) {
+  const r = (AVATAR_W / 2) * FACE_ZONE_SCALE;
+  const z = scene.add
+    .zone(sprite.x, sprite.y, r * 2, r * 2)
+    .setOrigin(0.5)
+    .setInteractive({ useHandCursor: true });
+  z.isFace = true; // flag so pointer‑handler can recognise it
+  z.owner = owner; // "me" | "opponent"
+
+  // optional thin outline (debug)
+  scene.add
+    .graphics()
+    .lineStyle(1, 0xff00ff, 0.35)
+    .strokeRectShape(z.getBounds());
+
+  return z;
+}
 
 export class Multiplayer extends Phaser.Scene {
   players = [];
-  dealt = false;
-  roster = [];
-  lastMyHandStr = "";
-  lastOppHandStr = "";
-  lastMyBoardStr = "";
-  lastOppBoardStr = "";
-  lastMyBoardStateStr = "";
-  lastOppBoardStateStr = "";
 
-  preload() {
-    // load every card image
-    CARDS.forEach((c) => {
-      const key = c.frame; // e.g., "001_goblin"
-      const url = `/assets/cards/${key}.png`; // served from /public
-      if (!this.textures.exists(key)) {
-        this.load.image(key, url);
-      }
-    });
-
-    // this.load.once("complete", () => {
-    //   console.log(
-    //     "[preload] loaded card textures:",
-    //     CARDS.map((c) => c.frame)
-    //   );
-    // });
+  constructor() {
+    super("Multiplayer");
   }
 
+  // =============== PRELOAD ==================================================
+  preload() {
+    CARDS.forEach((c) => {
+      const key = c.frame;
+      const url = `/assets/cards/${key}.png`;
+      if (!this.textures.exists(key)) this.load.image(key, url);
+    });
+  }
+
+  // =============== CREATE ===================================================
   create() {
-    this.screenMiddle = (this.scale.width - HP_BAR_W) / 2;
+    /* ------------------------------------------------\
+     | 1.  Basic UI scaffolding                        |
+    \* ------------------------------------------------*/
     this.ui = new UI(this);
     this.myHand = this.add.group();
     this.oppHand = this.add.group();
+    this.myBoard = new Board(this, myPlayer()?.id, true);
+    this.oppBoard = null; // when opponent joins
 
-    // this.myBoard = this.add.group();
-    // this.oppBoard = this.add.group();
+    // text style once – adjust to taste
+    const statStyle = { fontSize: 18, color: "#fff", fontFamily: "sans-serif" };
 
-    this.myBoard = new Board(this, myPlayer()?.id, true, null);
-    this.oppBoard = null; // Will be initialized when opponent joins
+    // my side
+    this.myHpTxt = this.add
+      .text(0, 0, "", statStyle)
+      .setOrigin(1, 0.5)
+      .setDepth(9_000);
+    this.myManaTxt = this.add
+      .text(0, 0, "", statStyle)
+      .setOrigin(1, 0.5)
+      .setDepth(9_000);
 
-    this.logicById = new Map(); // id -> PlayerState (your local logic)
-    this.deckById = new Map(); // id -> Deck
+    // opponent
+    this.oppHpTxt = this.add
+      .text(0, 0, "", statStyle)
+      .setOrigin(1, 0.5)
+      .setDepth(9_000);
+    this.oppManaTxt = this.add
+      .text(0, 0, "", statStyle)
+      .setOrigin(1, 0.5)
+      .setDepth(9_000);
 
-    this.lastMyMana = -1;
-    this.lastOppMana = -1;
+    this.screenMidX = (this.scale.width - 360) / 2;
 
-    this.createFaceZones();
-    // 1. Handle players joining and quitting.
+    /* ------------------------------------------------\
+     | 2.  Prepare core helpers                        |
+    \* ------------------------------------------------*/
+    this.deckMap = new Map(); // playerId → Deck
+    this.turnMan = new TurnManager(this.deckMap);
+    this.reqQueue = new RequestQueue(
+      [], // roster will be filled later
+      this.turnMan,
+      CARDS_BY_ID,
+      (msg) => this.addLog(msg)
+    );
+
+    /* ------------------------------------------------\
+     | 3.  Player join                                 |
+    \* ------------------------------------------------*/
     onPlayerJoin((ps) => {
-      this.addPlayer(ps); // keep your sprite code
+      // build a shuffled deck for *each* new player
+      const deck = new Deck(buildDeck(CARDS, DECK_COPIES)).shuffle();
+      this.deckMap.set(ps.id, deck);
 
-      console.log(ps.state.profile);
-
+      // first one to join becomes host’s opponent etc.
       if (ps.id !== me().id) {
-        this.oppState = ps; // remember opponent
-        this.oppBoard = new Board(this, ps.id, false, ps); // Initialize opponent board
-        // create divider now if opp is already here
+        this.oppState = ps;
+        this.oppBoard = new Board(this, ps.id, false, ps);
         this.ui.drawBoardsDivider(this.myBoard, this.oppBoard);
       }
 
-      this.roster.push(ps);
+      this.reqQueue.players.push(ps); // register into RequestQueue roster
 
-      /* deal once both players present ------------------------------- */
-      if (isHost() && !this.dealt && this.roster.length === 2) {
-        this.dealOpeningHands(); // 🔥 real cards distributed here
+      // once both present, host deals starting hands
+      if (isHost() && this.reqQueue.players.length === 2) {
+        this._dealOpeningHands();
+        setState("logs", [], true); // clear old logs
       }
     });
 
-    // 2. Pass player input to Playroom.
-    this.input.on("pointerdown", (pointer) => {
-      const dir = pointer.x < this.scale.width / 2 ? "left" : "right";
-      myPlayer().setState("dir", { x: dir });
-    });
-    this.input.on("pointerup", () => myPlayer().setState("dir", undefined));
-
-    /* ─── TURN TEXT ─────────────────────────────────────────────── */
-    this.turnText = this.add.text(TURN_TEXT_Y, 550, "", {
-      fontSize: 22,
-      fontFamily: 'Georgia, "Goudy Bookletter 1911", Times, serif',
-      align: "justify",
-      color: "#fff",
-    });
-
-    const updateTurnUI = () => {
-      const current = getState("turnPlayerId");
-      if (!current) return;
-      const mine = myPlayer()?.id;
-      const myTurn = current === mine;
-
-      this.turnText.setText(myTurn ? "Your Turn" : "Opponent Turn");
-      this.endBtn.setVisible(myTurn);
-
-      // quick clear of green outlines; update() will re-apply correct ones
-      this.myBoard?.clearAttackable();
-      this.oppBoard?.clearAttackable();
-    };
-
-    // run every 100 ms (cheap and simple)
-    this.time.addEvent({ delay: 100, loop: true, callback: updateTurnUI });
-
-    /* ─── END TURN BUTTON ───────────────────────────────────────── */
-    this.endBtn = this.ui.createEndTurnButton(TURN_TEXT_Y + 50);
-
+    /* ------------------------------------------------\
+     | 4.  Host‑only tick to process rules             |
+    \* ------------------------------------------------*/
     if (isHost()) {
-      this.reqTimer = setInterval(this.processRequests, 50); // 20Hz
-      this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-        clearInterval(this.reqTimer);
+      this.time.addEvent({
+        delay: TICK_MS,
+        loop: true,
+        callback: () => this.reqQueue.process(),
       });
     }
 
-    this.lastMyHp = -1;
-    this.lastOppHp = -1;
-    this.myHpText = this.add
-      .text(0, 0, "", { fontSize: 18, color: "#fff" })
-      .setOrigin(1, 0.5);
-    this.myManaText = this.add
-      .text(0, 0, "", { fontSize: 18, color: "#fff" })
-      .setOrigin(1, 0.5);
-    this.oppHpText = this.add
-      .text(0, 0, "", { fontSize: 18, color: "#fff" })
-      .setOrigin(1, 0.5);
-    this.oppManaText = this.add
-      .text(0, 0, "", { fontSize: 18, color: "#fff" })
-      .setOrigin(1, 0.5);
+    /* ------------------------------------------------\
+     | 5.  End‑turn button + turn‑indicator            |
+    \* ------------------------------------------------*/
+    this.endBtn = this.ui.createEndTurnButton();
+    // Get the button's center
+    const btnBounds = this.endBtn.getBounds();
+    const x = btnBounds.centerX;
+    const y = btnBounds.top - 10; // 10px above the button
 
-    this.time.delayedCall(0, () => {
-      console.log("[Multiplayer] calling initAttackSelection()");
-      this.initAttackSelection();
+    this.turnText = this.add
+      .text(x, y, "", {
+        fontSize: 22,
+        color: "#fff",
+      })
+      .setOrigin(0.5, 1); // Center horizontally, align bottom to the y position
+
+    // 🔄 Update position on resize
+    this.scale.on("resize", () => {
+      const bounds = this.endBtn.getBounds();
+      const newX = bounds.centerX;
+      const newY = bounds.top - 10;
+      this.turnText.setPosition(newX, newY);
+    });
+
+    this.time.addEvent({
+      delay: 100,
+      loop: true,
+      callback: () => {
+        const cur = getState("turnPlayerId");
+        if (!cur) return;
+        const mine = cur === myPlayer().id;
+        this.turnText.setText(mine ? "Your Turn" : "Opponent Turn");
+        this.endBtn.setVisible(mine);
+      },
+    });
+
+    this._initPointerHandlers();
+    this._createLogZone();
+  }
+
+  // =============== UPDATE ===================================================
+  update() {
+    if (!this._avatarsBuilt && getState("gameStarted")) {
+      this._avatarsBuilt = true;
+      this._createAllAvatars();
+    }
+    this._syncLogs();
+    this._syncHand();
+    this._syncBoards();
+    this._syncBars();
+    this._syncBoardState();
+    this._syncRejects();
+
+    /* stop updating if game over */
+    if (getState("gameOver")) {
+      if (!this.gameOverShown) this._showGameOverOverlay();
+      return;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // UI helpers  (scene‑only)
+  // ─────────────────────────────────────────────────────────────
+  _initPointerHandlers() {
+    /** Card waiting to attack (set on first click) */
+    this.pendingAttacker = null;
+
+    this.input.on("gameobjectup", (pointer, obj) => {
+      /* ───  A.  FACE ZONES  ────────────────────── */
+      if (obj?.isFace) {
+        if (!this.pendingAttacker) return; // need attacker first
+
+        const atkData = CARDS_BY_ID[this.pendingAttacker.cardId];
+        const healSpell = atkData.type === "spell" && (atkData.heal ?? 0) > 0;
+        const offensive = !healSpell;
+
+        if (obj.owner === "me") {
+          // clicking my face
+          if (!healSpell) {
+            this.ui.toast("You can only heal yourself");
+            return;
+          }
+        } else {
+          // clicking opponent face
+          if (!offensive) {
+            this.ui.toast("Cannot heal the enemy");
+            return;
+          }
+        }
+
+        myPlayer().setState("request", {
+          attack: { src: this.pendingAttacker.uid, dst: "player" },
+        });
+
+        this.pendingAttacker.highlight(false);
+        this.pendingAttacker = null;
+        return;
+      }
+
+      /* ───  B.  CARD CLICKS  ───────────────────── */
+      let card = obj;
+      if (!(card && card.isCard)) {
+        // child clicked? climb to container
+        if (card?.parentContainer && card.parentContainer.isCard) {
+          card = card.parentContainer;
+        } else {
+          return; // not a card – ignore
+        }
+      }
+
+      /* First click → choose attacker */
+      if (!this.pendingAttacker) {
+        const myTurn = getState("turnPlayerId") === myPlayer().id;
+        const onMySide = this.myBoard.contains(card);
+        if (!myTurn || !onMySide) return;
+
+        const acted = myPlayer().getState("hasAttacked") || {};
+        if (acted[card.uid]) {
+          this.ui.toast("This card already attacked.");
+          return;
+        }
+
+        this.pendingAttacker = card;
+        card.setAttackable(false);
+        card.highlight(true);
+        this.ui.toast("Choose a target");
+        return;
+      }
+
+      /* Second click → pick target */
+      const healSpell =
+        CARDS_BY_ID[this.pendingAttacker.cardId].type === "spell" &&
+        (CARDS_BY_ID[this.pendingAttacker.cardId].heal ?? 0) > 0;
+
+      const targetIsMine = this.myBoard.contains(card);
+
+      if (targetIsMine && !healSpell) {
+        this.ui.toast("Cannot target your own card.");
+        return;
+      }
+      if (!targetIsMine && healSpell) {
+        this.ui.toast("Heal can only target friendly units.");
+        return;
+      }
+
+      myPlayer().setState("request", {
+        attack: { src: this.pendingAttacker.uid, dst: card.uid },
+      });
+
+      this.pendingAttacker.highlight(false);
+      this.pendingAttacker = null;
+    });
+
+    /* click on empty space → cancel */
+    this.input.on("pointerdown", (p, objs) => {
+      if (objs.length === 0 && this.pendingAttacker) {
+        this.pendingAttacker.highlight(false);
+        this.pendingAttacker = null;
+        this.ui.toast("Attack cancelled");
+      }
     });
   }
 
-  addPlayer(playerState) {
+  _createLogZone() {
+    this.logZone = this.add.container(20, this.scale.height - 150); // bottom-left
+    this.logBg = this.add.rectangle(0, 0, 400, 120, 0x000000, 0.5).setOrigin(0);
+    this.logZone.add(this.logBg);
+
+    this.logTexts = [];
+    this.logMaxLines = 6; // number of visible log entries
+
+    this.addLog = (message) => {
+      const text = this.add
+        .text(10, 0, message, {
+          fontSize: 16,
+          color: "#fff",
+          wordWrap: { width: 380 },
+        })
+        .setOrigin(0, 0);
+
+      // Push to array and position lines
+      this.logTexts.push(text);
+      this.logZone.add(text);
+
+      // Shift up if exceeding max lines
+      if (this.logTexts.length > this.logMaxLines) {
+        const old = this.logTexts.shift();
+        old.destroy();
+      }
+
+      // Update Y positions for all lines
+      this.logTexts.forEach((t, i) => t.setY(10 + i * 18));
+    };
+  }
+
+  _addAvatar(playerState) {
     const isMe = playerState.id === me().id;
-    const startX = isMe ? LEFT_X : RIGHT_X - AVATAR_W / 2;
+    const startX = isMe ? LEFT_X : RIGHT_X;
     const startY = isMe ? BOTTOM_Y : TOP_Y;
 
-    const profile = playerState.state?.profile ?? {};
+    const profile = playerState.getProfile() ?? {};
+    console.log("[Multiplayer] _addAvatar()", playerState, profile);
     const name = profile.name || (isMe ? "You" : "Opponent");
     const ringColor = hexToInt(profile.color || "#ffffff");
-    const photo = profile.photo;
+    const photo = profile.photo || profile.avatar;
     const texKey = `avatar_${playerState.id}`;
 
     // --- placeholder circle we will swap later ---
@@ -260,6 +456,26 @@ export class Multiplayer extends Phaser.Scene {
     sprite.body.setCircle((AVATAR_W / 2) * (sprite.scaleX || 1));
     sprite.body.setCollideWorldBounds(true);
 
+    const zone = makeFaceZone(this, sprite, isMe ? "me" : "opponent");
+
+    const refreshFromProfile = (prof = {}) => {
+      console.log("[Multiplayer] refreshFromProfile()", prof);
+      nameText.setText(prof.name || (isMe ? "You" : "Opponent"));
+
+      const col = hexToInt(prof.color || "#ffffff");
+      ring
+        .clear()
+        .lineStyle(4, col, 1)
+        .strokeCircle(startX, startY, AVATAR_W / 2 + 1);
+
+      if (prof.photo && prof.photo !== sprite.currentPhoto) {
+        sprite.currentPhoto = prof.photo;
+        loadBase64Texture(this, texKey, prof.photo)
+          .then(() => sprite.setTexture(texKey))
+          .catch(console.warn);
+      }
+    };
+
     // keep references
     const entry = {
       sprite,
@@ -270,6 +486,8 @@ export class Multiplayer extends Phaser.Scene {
       nameBg,
       state: playerState,
       mirror: !isMe,
+      lastProfile: { ...profile },
+      refresh: refreshFromProfile,
       destroy() {
         sprite.destroy();
         ring.destroy();
@@ -323,820 +541,247 @@ export class Multiplayer extends Phaser.Scene {
       this.players = this.players.filter((p) => p.state !== playerState);
       if (this.textures.exists(texKey)) this.textures.remove(texKey);
     });
+
+    return { sprite, zone };
   }
 
-  createFaceZones() {
-    const w = this.scale.width;
-    const padX = 80; // keep away from edges
-    const zoneW = w - padX * 2;
-    const zoneH = 140; // height of the clickable band
-
-    const startX = LEFT_X;
-
-    // Opponent face zone near the top
-    const oppY = 60; // adjust to taste
-    this.oppFaceZone = this.add
-      .zone(startX, oppY, AVATAR_W * 1.8, AVATAR_H * 1.8)
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true });
-    this.oppFaceZone.isFace = true;
-    this.oppFaceZone.owner = "opponent";
-
-    // Player face zone near the bottom (for self‑heal)
-    const myY = this.scale.height - 100;
-    this.myFaceZone = this.add
-      .zone(w / 2, myY, zoneW, zoneH)
-      .setOrigin(0.5)
-      .setInteractive();
-    this.myFaceZone.isFace = true;
-    this.myFaceZone.owner = "me";
-
-    // optional: very light debug outlines
-    const g = this.add.graphics().setDepth(9999);
-    g.lineStyle(1, 0xff0000, 0.4).strokeRectShape(this.oppFaceZone.getBounds());
+  _createAllAvatars() {
+    this.players.forEach((pEntry) => pEntry.destroy?.()); // safety if re‑joining
+    this.players = [];
+    const playersList = getParticipants();
+    console.log("[Multiplayer] _createAllAvatars()", playersList);
+    this.reqQueue.players.forEach((ps) => this._addAvatar(ps));
   }
 
-  dealOpeningHands() {
-    if (this.dealt) return;
+  _dealOpeningHands() {
+    // host draws START_HAND_SIZE cards for each player
+    this.reqQueue.players.forEach((p) => {
+      const deck = this.deckMap.get(p.id);
+      const hand = [];
+      for (let i = 0; i < START_HAND_SIZE; i++) {
+        const card = deck.draw();
+        if (card) hand.push(card.uid);
+      }
+      p.setState("hand", hand, true);
+      p.setState("handReady", true, true);
+      p.setState("hp", HEALTH_POINTS, true);
+      p.setState("mana", MAX_MANA, true);
+      p.setState("maxMana", MAX_MANA, true);
+      p.setState("turnCount", 1, true); // ✅ initialize turn counter
+    });
 
-    // need TWO players
-    if (this.roster.length < 2) {
-      console.warn("Only one player in room, delaying dealOpeningHands()");
-      return; // just wait — it will be called again when the 2nd joins
-    }
-
-    this.dealt = true;
-
-    // identify host & guest PlayerState objects
-    const hostPS = me();
-    const guestPS = this.roster.find((p) => p.id !== hostPS.id);
-
-    /* 1. shuffle & split */
-    // const hostDeck = new Deck([...CARDS]).shuffle(); // copy, then shuffle
-    // const guestDeck = new Deck([...CARDS]).shuffle(); // copy, then shuffle
-    const hostDeck = new Deck(buildDeck(CARDS, DECK_COPIES)).shuffle(); // 5 * DECK_COPIES = 40 cards
-    const guestDeck = new Deck(buildDeck(CARDS, DECK_COPIES)).shuffle();
-
-    /* 2. local logic */
-    const hostLogic = new PlayerState(hostDeck);
-    const guestLogic = new PlayerState(guestDeck);
-
-    this.logicById.set(hostPS.id, hostLogic);
-    this.logicById.set(guestPS.id, guestLogic);
-
-    const opening = Math.min(
-      START_HAND_SIZE,
-      hostDeck.size(),
-      guestDeck.size()
-    );
-    for (let i = 0; i < opening; i++) {
-      // draw 5 each now
-      hostLogic.startTurn();
-      guestLogic.startTurn();
-    }
-
-    /* 3. publish */
-    hostPS.setState(
-      "hand",
-      hostLogic.hand.map((c) => c.uid),
-      true
-    );
-    guestPS.setState(
-      "hand",
-      guestLogic.hand.map((c) => c.uid),
-      true
-    );
-
-    hostPS.setState("handReady", true, true);
-    guestPS.setState("handReady", true, true);
-
-    setState("turnPlayerId", hostPS.id, true);
-    setState("phase", "main", true);
-
-    hostPS.setState("hp", HEALTH_POINTS, true);
-    guestPS.setState("hp", HEALTH_POINTS, true);
-
-    hostPS.setState("mana", MANA_POINTS, true);
-    guestPS.setState("mana", MANA_POINTS, true);
-
-    hostPS.setState("maxMana", MANA_POINTS, true);
-    guestPS.setState("maxMana", MANA_POINTS, true);
+    // pick first player
+    setState("firstPlayerId", me().id, true);
+    // host starts
+    setState("turnPlayerId", me().id, true);
+    // start game
+    setState("gameStarted", true, true);
   }
 
-  renderHand(ids) {
-    console.log("[Multiplayer] renderHand()", ids);
-    this.myHand.clear(true, true); // delete old
+  _syncLogs() {
+    const logs = getState("logs") || [];
+    if (this._lastLogKey === JSON.stringify(logs)) return;
+    this._lastLogKey = JSON.stringify(logs);
 
-    ids.forEach((uid, idx) => {
-      const baseId = uid.split("#")[0];
+    this.logTexts.forEach((t) => t.destroy());
+    this.logTexts = [];
+
+    logs.slice(-this.logMaxLines).forEach((msg) => this.addLog(msg));
+  }
+
+  _syncHand() {
+    const hand = myPlayer()?.getState("hand") || [];
+    const key = hand.join(",");
+    if (key === this._lastHandKey) return;
+    this._lastHandKey = key;
+
+    this.myHand.clear(true, true);
+    hand.forEach((uid, idx) => {
+      const base = uid.split("#")[0];
       const card = new PlaceholderCard(
         this,
-        baseId,
-        this.screenMiddle + idx * 110,
-        MY_START_HAND_Y_POSITION,
+        base,
+        this.screenMidX + idx * 110,
+        MY_HAND_Y,
         uid
       );
       this.myHand.add(card);
-
-      card.on("pointerup", () => {
-        // later: only allow if it's your turn, enough mana, etc.
-        myPlayer().setState("request", { play: uid });
-        console.log("requesting to play", uid);
-      });
-    });
-  }
-
-  renderOppHand(ids) {
-    this.oppHand.clear(true, true);
-
-    ids.forEach((_, idx) => {
-      // Use PlaceholderCard but hide the ID to keep it secret
-      const card = new PlaceholderCard(
-        this,
-        "🌒",
-        this.screenMiddle + idx * 85,
-        OPP_START_HAND_Y_POSITION
+      card.on("pointerup", () =>
+        myPlayer()?.setState("request", { play: uid })
       );
-      this.oppHand.add(card);
-      // No pointer listeners – you can’t interact with opponent hand
     });
   }
 
-  renderBoard(playerId, ids) {
-    if (!playerId || !ids) return;
-    if (playerId === myPlayer()?.id && this.myBoard) {
-      this.myBoard.render(ids);
-    } else if (
-      this.oppState &&
-      playerId === this.oppState.id &&
-      this.oppBoard
-    ) {
-      this.oppBoard.render(ids);
-    }
-  }
-
-  processRequests = () => {
-    if (!isHost()) return;
-    if (getState("gameOver")) return;
-
-    for (const p of this.roster) {
-      const req = p.getState("request");
-      if (!req) continue;
-
-      /* ---- PLAY CARD ---- */
-      if (req.play) {
-        const hand = p.getState("hand") || [];
-        const board = p.getState("board") || [];
-
-        const uid = req.play; // now a uid like "005#17"
-        const idx = hand.indexOf(uid);
-        if (idx === -1) {
-          p.setState("request", null);
-          continue;
-        }
-
-        const baseId = uid.split("#")[0];
-        const card = CARDS.find((c) => c.id === baseId);
-        const cost = card?.cost ?? 0;
-        const mana = p.getState("mana") ?? 0;
-
-        if (getState("turnPlayerId") !== p.id) {
-          p.setState("request", null);
-          continue;
-        }
-        if (mana < cost) {
-          p.setState("reject", { reason: "mana", card: uid }, true);
-          p.setState("request", null);
-          continue;
-        }
-
-        p.setState("mana", mana - cost, true);
-
-        hand.splice(idx, 1);
-        board.push(uid);
-
-        p.setState("hand", hand, true);
-        p.setState("board", board, true);
-
-        if (card?.type === "creature") {
-          const bs = p.getState("boardState") || {};
-          bs[uid] = card.health; // key by uid
-          p.setState("boardState", bs, true);
-        }
-
-        p.setState("request", null);
-        continue;
-      }
-
-      /* ---- ATTACK ---- */
-      if (req.attack) {
-        const { src, dst } = req.attack; // uids or dst === "player"
-        const turnOk = getState("turnPlayerId") === p.id;
-        if (!turnOk) {
-          console.log("[attack] rejected: not your turn");
-          p.setState("request", null);
-          continue;
-        }
-
-        const myBoard = p.getState("board") || [];
-        const foe = this.roster.find((r) => r.id !== p.id);
-        const foeBoard = foe.getState("board") || [];
-
-        if (!myBoard.includes(src)) {
-          console.log("[attack] rejected: src not on my board", src, myBoard);
-          p.setState("request", null);
-          continue;
-        }
-
-        /* ---------- one‑attack‑per‑turn gate ---------- */
-        {
-          const acted = p.getState("hasAttacked") || {};
-          if (acted[src]) {
-            p.setState("reject", { reason: "exhausted", src }, true);
-            p.setState("request", null);
-            continue;
-          }
-        }
-        /* --------------------------------------------- */
-
-        const srcBase = src.split("#")[0];
-        const srcData = CARDS.find((c) => c.id === srcBase);
-        if (!srcData) {
-          console.log("[attack] rejected: unknown src card", srcBase);
-          p.setState("request", null);
-          continue;
-        }
-
-        const isCreature = srcData.type === "creature";
-        const isHealSpell = srcData.type === "spell" && (srcData.heal ?? 0) > 0;
-        const isDamageSpell =
-          srcData.type === "spell" && (srcData.damage ?? 0) > 0;
-
-        if (dst === "player") {
-          if (isHealSpell) {
-            // self-heal (attacker’s player)
-            const hp = p.getState("hp") ?? 0;
-            p.setState(
-              "hp",
-              Math.min(HEALTH_POINTS, hp + (srcData.heal ?? 0)),
-              true
-            );
-          } else {
-            // damage to opponent face ONLY if they have no creatures
-            const foeBoard = foe.getState("board") || [];
-            if (foeBoard.length > 0) {
-              // reject: taunt-like rule — creatures present, face is protected
-              p.setState("reject", { reason: "protectedFace" }, true);
-              p.setState("request", null);
-              continue;
-            }
-            const dmg = isCreature ? srcData.attack ?? 0 : srcData.damage ?? 0;
-            const hp = foe.getState("hp") ?? 0;
-            foe.setState("hp", Math.max(0, hp - dmg), true);
-            this.time.delayedCall(0, () => this.checkGameOver());
-          }
-
-          // mark as used
-          const acted = p.getState("hasAttacked") || {};
-          acted[src] = true;
-          p.setState("hasAttacked", acted, true);
-
-          p.setState("request", null);
-          continue;
-        } else {
-          const targetOnMySide = myBoard.includes(dst);
-          const targetOnFoeSide = foeBoard.includes(dst);
-
-          if (isHealSpell) {
-            if (!targetOnMySide) {
-              console.log("[attack] rejected: heal must target friendly", {
-                dst,
-                myBoard,
-              });
-              p.setState("request", null);
-              continue;
-            }
-            console.log("[attack] HEAL → friendly unit", { src, dst });
-            this.resolveSpellAttack(p, foe, src, dst, srcData);
-
-            // mark as used
-            const acted = p.getState("hasAttacked") || {};
-            acted[src] = true;
-            p.setState("hasAttacked", acted, true);
-
-            p.setState("request", null);
-            continue;
-          }
-
-          if (!targetOnFoeSide) {
-            console.log("[attack] rejected: offensive must target enemy", {
-              dst,
-              foeBoard,
-            });
-            p.setState("request", null);
-            continue;
-          }
-
-          console.log("[attack] src/dst", src, dst);
-          if (isCreature) {
-            const dstBase = dst.split("#")[0];
-            const dstData = CARDS.find((c) => c.id === dstBase);
-            this.applyCreatureDamage(src, dst, p, foe, srcData, dstData);
-          } else if (isDamageSpell) {
-            this.resolveSpellAttack(p, foe, src, dst, srcData);
-          }
-
-          // mark as used
-          const acted = p.getState("hasAttacked") || {};
-          acted[src] = true;
-          p.setState("hasAttacked", acted, true);
-
-          p.setState("request", null);
-          continue;
-        }
-      }
-
-      /* ---- END TURN ---- */
-      if (req.endTurn) {
-        p.setState("request", null);
-        const current = getState("turnPlayerId");
-        if (current !== p.id) continue;
-        const next = this.roster.find((x) => x.id !== p.id);
-        setState("turnPlayerId", next.id, true);
-        this.startTurn(next);
-      }
-    }
-  };
-
-  startTurn = (pState) => {
-    // 1) mana stuff
-    const curMax = pState.getState("maxMana") ?? 0;
-    const newMax = Math.min(curMax + 1, MANA_POINTS);
-    pState.setState("maxMana", newMax, true);
-    pState.setState("mana", newMax, true);
-
-    const boardUids = pState.getState("board") || [];
-    const reset = {};
-    for (const uid of boardUids) reset[uid] = false;
-    pState.setState("hasAttacked", reset, true);
-
-    // 2) draw one card
-    const logic = this.logicById.get(pState.id);
-    if (!logic) {
-      console.warn("No logic for player", pState.id);
-      return;
+  _syncBoards() {
+    // own board
+    const meBoard = myPlayer()?.getState("board") || [];
+    if (meBoard.join() !== this._lastMeBoardKey) {
+      this._lastMeBoardKey = meBoard.join();
+      this.myBoard.render(meBoard);
     }
 
-    const drawn = logic.deck.draw();
-    console.log("Drawn card", drawn);
-    if (drawn) {
-      const hand = pState.getState("hand") || [];
-      if (hand.length < 5) {
-        hand.push(drawn.uid);
-        pState.setState("hand", hand, true);
-      } else {
-        // optional: burn the card or put it back
-        console.log("Hand full, burned card", drawn.uid);
-      }
-    }
-  };
-
-  update() {
-    const ps = myPlayer();
-    if (!ps) return;
-
-    const myHand = ps.getState("hand") || [];
-    const hs = JSON.stringify(myHand);
-    if (hs !== this.lastMyHandStr) {
-      console.log("my hand changed");
-      this.lastMyHandStr = hs;
-      this.renderHand(myHand);
-    }
-
-    // if (ps.getState("handReady") && !this.handDrawn) {
-    //   this.handDrawn = true;
-    //   this.renderHand(ps.getState("hand"));
-    // }
-
-    const myTurn = getState("turnPlayerId") === myPlayer().id;
-    const actedMap = ps.getState("hasAttacked") || {};
-    this.myBoard?.setAttackable(actedMap, myTurn);
-
-    if (this.oppState && this.oppState.getState("handReady")) {
-      const oppHand = this.oppState.getState("hand") || [];
-      const s = JSON.stringify(oppHand);
-      if (s !== this.lastOppHandStr) {
-        // hand size changed
-        this.lastOppHandStr = s;
-        if (oppHand.length === 0) return;
-        this.renderOppHand(oppHand);
-      }
-    }
-
+    // opponent board / hand
     if (this.oppState) {
       const oppBoard = this.oppState.getState("board") || [];
-      const so = JSON.stringify(oppBoard);
-      if (so !== this.lastOppBoardStr) {
-        this.lastOppBoardStr = so;
-        this.renderBoard(this.oppState.id, oppBoard);
+      if (oppBoard.join() !== this._lastOppBoardKey) {
+        this._lastOppBoardKey = oppBoard.join();
+        this.oppBoard.render(oppBoard);
       }
 
-      const oppActed = this.oppState.getState("hasAttacked") || {};
-      const oppTurn = getState("turnPlayerId") === this.oppState.id;
-      this.oppBoard?.setAttackable(oppActed, oppTurn);
+      const oppHand = this.oppState.getState("hand") || [];
+      if (oppHand.length !== this._oppHandSize) {
+        this._oppHandSize = oppHand.length;
+        // Draw backs only – hide type
+        this.oppHand.clear(true, true);
+        oppHand.forEach((_, i) =>
+          this.oppHand.add(
+            new PlaceholderCard(
+              this,
+              "🌒",
+              this.screenMidX + i * 85,
+              OPP_HAND_Y
+            )
+          )
+        );
+      }
     }
+  }
 
-    const myBoard = ps.getState("board") || [];
-    const sm = JSON.stringify(myBoard);
-    if (sm !== this.lastMyBoardStr) {
-      this.lastMyBoardStr = sm;
-      this.renderBoard(ps.id, myBoard);
-    }
+  _syncBars() {
+    /* ---------- my bars ---------- */
+    const hp = myPlayer()?.getState("hp") ?? 0;
+    const mp = myPlayer()?.getState("mana") ?? 0;
 
-    // MY bars
-    const myHp = ps.getState("hp") ?? 0;
-    if (myHp !== this.lastMyHp) {
-      this.lastMyHp = myHp;
+    if (hp !== this._lastHp || mp !== this._lastMp) {
+      this._lastHp = hp;
+      this._lastMp = mp;
+
+      // draw bars (returns positions)
       const hpPos = this.ui.drawHpBar(
-        this.screenMiddle - HP_MANA_BAR_START_X_TUNER,
+        this.screenMidX - BAR_SHIFT_X,
         965,
-        myHp,
+        hp,
         HEALTH_POINTS,
         true
       );
-      this.myHpText.setText(`HP ${myHp}`).setPosition(hpPos.left - 8, hpPos.cy);
-    }
-
-    // OPP bars
-    if (this.oppState) {
-      const oppHp = this.oppState.getState("hp") ?? 0;
-      if (oppHp !== this.lastOppHp) {
-        this.lastOppHp = oppHp;
-        const hpPos = this.ui.drawHpBar(
-          this.screenMiddle - HP_MANA_BAR_START_X_TUNER,
-          60,
-          oppHp,
-          HEALTH_POINTS,
-          false
-        );
-        this.oppHpText
-          .setText(`HP ${oppHp}`)
-          .setPosition(hpPos.left - 8, hpPos.cy);
-      }
-    }
-
-    /* ---- MY MANA ---- */
-    const myMana = ps.getState("mana") ?? 0;
-    if (myMana !== this.lastMyMana) {
-      this.lastMyMana = myMana;
       const mpPos = this.ui.drawManaBar(
-        this.screenMiddle - HP_MANA_BAR_START_X_TUNER,
+        this.screenMidX - BAR_SHIFT_X,
         985,
-        myMana,
-        MANA_POINTS,
+        mp,
+        MAX_MANA,
         true
       );
-      this.myManaText
-        .setText(`MANA ${myMana}`)
+
+      // place / update labels *after* the bars, so they stay on top
+      this.myHpTxt.setText(`HP ${hp}`).setPosition(hpPos.left - 8, hpPos.cy);
+      this.myManaTxt
+        .setText(`MANA ${mp}`)
         .setPosition(mpPos.left - 8, mpPos.cy);
     }
 
-    /* ---- OPP MANA ---- */
+    /* ---------- opponent bars ---------- */
     if (this.oppState) {
-      const oppMana = this.oppState.getState("mana") ?? 0;
-      if (oppMana !== this.lastOppMana) {
-        this.lastOppMana = oppMana;
-        const mpPos = this.ui.drawManaBar(
-          this.screenMiddle - HP_MANA_BAR_START_X_TUNER,
-          80,
-          oppMana,
-          MANA_POINTS,
+      const oh = this.oppState.getState("hp") ?? 0;
+      const om = this.oppState.getState("mana") ?? 0;
+
+      if (oh !== this._lastOppHp || om !== this._lastOppMp) {
+        this._lastOppHp = oh;
+        this._lastOppMp = om;
+
+        const hpPos = this.ui.drawHpBar(
+          this.screenMidX - BAR_SHIFT_X,
+          60,
+          oh,
+          HEALTH_POINTS,
           false
         );
-        this.oppManaText
-          .setText(`MANA ${oppMana}`)
+        const mpPos = this.ui.drawManaBar(
+          this.screenMidX - BAR_SHIFT_X,
+          80,
+          om,
+          MAX_MANA,
+          false
+        );
+
+        this.oppHpTxt.setText(`HP ${oh}`).setPosition(hpPos.left - 8, hpPos.cy);
+        this.oppManaTxt
+          .setText(`MANA ${om}`)
           .setPosition(mpPos.left - 8, mpPos.cy);
       }
     }
+  }
 
-    // --------------------------------------------------
-    //  Show end‑of‑game overlay once, when it appears
-    // --------------------------------------------------
-    if (!this.gameOverShown && getState("gameOver")) {
-      this.gameOverShown = true;
-
-      const winnerId = getState("gameOver").winnerId;
-      const iWon = winnerId === myPlayer().id;
-      const msg = iWon ? "YOU WIN!" : "YOU LOSE";
-
-      const overlay = this.add
-        .rectangle(
-          this.scale.width / 2,
-          this.scale.height / 2,
-          600,
-          240,
-          0x000000,
-          0.8
-        )
-        .setOrigin(0.5)
-        .setDepth(200000);
-
-      const text = this.add
-        .text(this.scale.width / 2, this.scale.height / 2, msg, {
-          fontSize: 72,
-          color: "#ffffff",
-          fontStyle: "bold",
-        })
-        .setOrigin(0.5)
-        .setDepth(200001);
-
-      // optional: stop pointer events completely
-      this.input.enabled = false;
+  _syncBoardState() {
+    /* ---------- mine ---------- */
+    const myBS = myPlayer()?.getState("boardState") || {};
+    const myStr = JSON.stringify(myBS);
+    if (myStr !== this._lastMyBS) {
+      this._lastMyBS = myStr;
+      this.myBoard.updateHpTexts(myBS); // << redraw
     }
 
-    if (getState("gameOver")) return;
-
-    /* ---- REJECTS ---- */
-    const rej = ps.getState("reject");
-    if (rej) {
-      if (rej.reason === "mana") {
-        this.ui.flashManaBar(); // visual cue
-        this.ui.toast("Not enough mana!");
-        // this.shakeCardInHand(rej.card);
-      } else if (rej.reason === "exhausted") {
-        this.ui.toast("That card already attacked this turn.");
-      } else if (rej.reason === "protectedFace") {
-        this.ui.toast("You must clear enemy creatures before attacking face.");
-      }
-      ps.setState("reject", null); // clear it
-    }
-
-    // ---- BOARD STATE (HP) CHANGES ----
-    const myBS = ps.getState("boardState") || {};
-    const myBSS = JSON.stringify(myBS);
-    if (myBSS !== this.lastMyBoardStateStr) {
-      this.lastMyBoardStateStr = myBSS;
-      // this.updateHpTexts(this.myBoard, myBS, true); // true = it's me
-      this.myBoard.updateHpTexts(myBS);
-    }
-
+    /* ---------- opponent ---------- */
     if (this.oppState) {
       const oppBS = this.oppState.getState("boardState") || {};
-      const oppBSS = JSON.stringify(oppBS);
-      if (oppBSS !== this.lastOppBoardStateStr) {
-        this.lastOppBoardStateStr = oppBSS;
-        // this.updateHpTexts(this.oppBoard, oppBS, false);
+      const oppStr = JSON.stringify(oppBS);
+      if (oppStr !== this._lastOppBS) {
+        this._lastOppBS = oppStr;
         this.oppBoard.updateHpTexts(oppBS);
       }
     }
   }
 
-  /** -----------------------------------------------------------------
-   *  Two–click attack selection
-   *    1. click one of *your* creatures  → marks it as the attacker
-   *    2. click an enemy creature/player → sends the attack request
-   * ----------------------------------------------------------------*/
-  initAttackSelection() {
-    console.log("[Multiplayer] initAttackSelection() entered");
-    /** Card that was chosen as the attacker (or null) */
-    this.pendingAttacker = null;
+  _syncRejects() {
+    const rej = myPlayer()?.getState("reject");
+    if (!rej) return;
 
-    this.input.on("gameobjectup", (pointer, obj) => {
-      let card = obj;
+    if (rej.reason === "mana") {
+      this.ui.toast("❌ Not enough mana to play that card!");
+    }
 
-      // Allow face zones
-      if (obj?.isFace) {
-        // if first click not chosen yet, ignore
-        if (!this.pendingAttacker) return;
+    if (rej.reason === "firstTurn") {
+      this.ui.toast("❌ You cannot attack on the first turn!");
+    }
 
-        const atkData = CARDS_BY_ID[this.pendingAttacker.cardId];
-        const isHealSpell =
-          atkData?.type === "spell" && (atkData.heal ?? 0) > 0;
-        const isDamageOrCreature = !isHealSpell;
-
-        if (obj.owner === "me") {
-          // clicking my face: allow only HEAL spells
-          if (!isHealSpell) {
-            this.ui.toast("You can only heal your own player.");
-            return;
-          }
-          this.sendAttackRequest(this.pendingAttacker.uid, "player");
-          this.pendingAttacker.highlight(false);
-          this.pendingAttacker = null;
-          return;
-        }
-
-        if (obj.owner === "opponent") {
-          // clicking opponent face
-          if (!isDamageOrCreature) {
-            this.ui.toast("Healing the enemy isn't allowed.");
-            return;
-          }
-          // We *try* to hit face; host will enforce "no creatures on foe board"
-          this.sendAttackRequest(this.pendingAttacker.uid, "player");
-          this.pendingAttacker.highlight(false);
-          this.pendingAttacker = null;
-          return;
-        }
-
-        return;
-      }
-
-      // ----- existing card-selection logic -----
-      if (!(card && card.isCard)) {
-        if (card?.parentContainer && card.parentContainer.isCard) {
-          card = card.parentContainer;
-        } else {
-          return;
-        }
-      }
-
-      // FIRST CLICK
-      if (!this.pendingAttacker) {
-        const myTurn = getState("turnPlayerId") === myPlayer().id;
-        const onMyBoard = this.myBoard?.contains(card);
-        if (!myTurn || !onMyBoard) return;
-
-        const acted = myPlayer().getState("hasAttacked") || {};
-        if (acted[card.uid]) {
-          this.ui.toast("This card already attacked.");
-          return;
-        }
-
-        this.pendingAttacker = card;
-        card.setAttackable(false);
-        card.highlight(true);
-        this.ui.toast("Choose a target");
-        return;
-      }
-
-      // SECOND CLICK on a card (your previous logic)
-      const clickedMyBoard = this.myBoard?.contains(card);
-      const atkBaseId = this.pendingAttacker.cardId;
-      const atkData = CARDS_BY_ID[atkBaseId];
-      const isCreature = atkData?.type === "creature";
-      const isHealSpell = atkData?.type === "spell" && (atkData.heal ?? 0) > 0;
-
-      if (clickedMyBoard) {
-        if (isHealSpell) {
-          this.sendAttackRequest(this.pendingAttacker.uid, card.uid);
-          this.pendingAttacker.highlight(false);
-          this.pendingAttacker = null;
-          return;
-        }
-        this.ui.toast("Cannot target your own card.");
-        return;
-      }
-
-      if (isHealSpell) {
-        this.ui.toast("Heal can only target friendly units.");
-        return;
-      }
-
-      this.sendAttackRequest(this.pendingAttacker.uid, card.uid ?? "player");
-      this.pendingAttacker.highlight(false);
-      this.pendingAttacker = null;
-    });
-
-    /* -------- Click on empty space  →  cancel selection ------ */
-    this.input.on(
-      "pointerdown",
-      (pointer, objs) => {
-        if (objs.length === 0 && this.pendingAttacker) {
-          this.pendingAttacker.highlight(false);
-          this.pendingAttacker = null;
-          this.ui.toast("Attack cancelled");
-        }
-      },
-      this
-    );
+    // clear reject after showing
+    myPlayer()?.setState("reject", null);
   }
 
-  sendAttackRequest(srcId, dstId) {
-    console.log("ATTACK →", srcId, "→", dstId);
-    myPlayer().setState("request", {
-      attack: { src: srcId, dst: dstId }, // dst == "player" for face‑hit
-    });
-  }
+  _showGameOverOverlay() {
+    // do this only once
+    if (this.gameOverShown) return;
+    this.gameOverShown = true;
 
-  applyCreatureDamage(srcUid, dstUid, atkPS, defPS, srcData, dstData) {
-    const atkBoard = atkPS.getState("boardState") || {};
-    const defBoard = defPS.getState("boardState") || {};
+    const winnerId = getState("gameOver").winnerId;
+    const msg = winnerId === myPlayer()?.id ? "YOU WIN!" : "YOU LOSE";
 
-    const newDstHp =
-      (defBoard[dstUid] ?? dstData.health) - (srcData.attack ?? 0);
-    const newSrcHp =
-      (atkBoard[srcUid] ?? srcData.health) - (dstData.attack ?? 0);
+    // choose one large number and reuse it for every overlay child
+    const Z = 10_000; // safely above everything in this scene
 
-    if (newDstHp <= 0) {
-      const arr = defPS.getState("board") || [];
-      defPS.setState(
-        "board",
-        arr.filter((uid) => uid !== dstUid),
-        true
-      );
-      delete defBoard[dstUid];
-    } else {
-      defBoard[dstUid] = newDstHp;
-    }
+    // --- black translucent backdrop ---
+    this.add
+      .rectangle(
+        this.scale.width / 2,
+        this.scale.height / 2,
+        600,
+        240,
+        0x000000,
+        0.8
+      )
+      .setOrigin(0.5)
+      .setDepth(Z);
 
-    if (newSrcHp <= 0) {
-      const arr = atkPS.getState("board") || [];
-      atkPS.setState(
-        "board",
-        arr.filter((uid) => uid !== srcUid),
-        true
-      );
-      delete atkBoard[srcUid];
-    } else {
-      atkBoard[srcUid] = newSrcHp;
-    }
+    // --- text ---
+    this.add
+      .text(this.scale.width / 2, this.scale.height / 2, msg, {
+        fontSize: 72,
+        color: "#fff",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setDepth(Z + 1); // a tiny bit above the backdrop
 
-    atkPS.setState("boardState", atkBoard, true);
-    defPS.setState("boardState", defBoard, true);
-  }
-
-  resolveSpellAttack(atkPS, defPS, srcUid, dstUidOrPlayer, spellData) {
-    console.log(
-      "resolveSpellAttack()",
-      atkPS,
-      defPS,
-      srcUid,
-      dstUidOrPlayer,
-      spellData
-    );
-    const board = atkPS.getState("board") || [];
-    const atkBoardState = atkPS.getState("boardState") || {};
-    const defBoardState = defPS.getState("boardState") || {};
-
-    const damage = spellData.damage ?? 0;
-    const heal = spellData.heal ?? 0;
-
-    if (damage > 0) {
-      if (dstUidOrPlayer === "player") {
-        const hp = defPS.getState("hp") ?? 0;
-        defPS.setState("hp", Math.max(0, hp - damage), true);
-        this.checkGameOver();
-      } else {
-        const dstUid = dstUidOrPlayer;
-        const dstBase = dstUid.split("#")[0];
-        const dstData = CARDS.find((c) => c.id === dstBase);
-
-        if (dstData?.type === "creature") {
-          const newHp = (defBoardState[dstUid] ?? dstData.health) - damage;
-          if (newHp <= 0) {
-            const arr = defPS.getState("board") || [];
-            defPS.setState(
-              "board",
-              arr.filter((u) => u !== dstUid),
-              true
-            );
-            delete defBoardState[dstUid];
-          } else {
-            defBoardState[dstUid] = newHp;
-          }
-          defPS.setState("boardState", defBoardState, true);
-        } else {
-          // spell targeting a spell: usually no effect — decide your rule
-        }
-      }
-    }
-
-    if (heal > 0) {
-      // heal self or ally. Pick a rule; here's: heal your own target if uid, else heal player
-      if (dstUidOrPlayer === "player") {
-        const hp = atkPS.getState("hp") ?? 0;
-        atkPS.setState("hp", Math.min(HEALTH_POINTS, hp + heal), true);
-      } else {
-        const dstUid = dstUidOrPlayer;
-        const dstBase = dstUid.split("#")[0];
-        const dstData = CARDS.find((c) => c.id === dstBase);
-        if (dstData?.type === "creature") {
-          const cur = atkBoardState[dstUid] ?? dstData.health;
-          const newHp = Math.min(dstData.health, cur + heal);
-          atkBoardState[dstUid] = newHp;
-          atkPS.setState("boardState", atkBoardState, true);
-
-          console.log("healing creature", dstUid, "from", cur, "to", newHp);
-        }
-      }
-    }
-
-    // one-shot spell is consumed
-    const newBoard = board.filter((u) => u !== srcUid);
-    atkPS.setState("board", newBoard, true);
-  }
-
-  checkGameOver() {
-    if (!isHost()) return;
-
-    // who is alive?
-    const alive = this.roster.filter((p) => (p.getState("hp") ?? 0) > 0);
-
-    if (alive.length === 1) {
-      const winner = alive[0];
-      setState("gameOver", { winnerId: winner.id }, true); // broadcast
-      console.log("[GAME OVER] winner →", winner);
-    }
+    // optional: block further clicks
+    this.input.enabled = false;
   }
 }

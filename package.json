@@ -35,6 +35,7 @@
         "webpack-merge": "^6.0.0"
     },
     "dependencies": {
+        "@multiavatar/multiavatar": "^1.0.7",
         "nipplejs": "^0.10.2",
         "phaser": "^3.90.0",
         "playroomkit": "^0.0.89"

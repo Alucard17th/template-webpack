@@ -104,9 +104,13 @@ export class UI {
   }
 
   // End Turn Button
-  createEndTurnButton(x = 900, y = 620) {
+  createEndTurnButton(offsetX = 30, offsetY = 30) {
     const w = 180,
       h = 48;
+
+    // Start position: bottom-right minus offsets
+    const x = this.scene.scale.width - w / 2 - offsetX;
+    const y = this.scene.scale.height - h / 2 - offsetY;
 
     const rect = this.scene.add
       .rectangle(x, y, w, h, 0x145214)
@@ -134,6 +138,15 @@ export class UI {
       .container(0, 0, [rect, label])
       .setSize(w, h)
       .setVisible(false);
+
+    // ✅ Listen for resize and reposition dynamically
+    this.scene.scale.on("resize", (gameSize) => {
+      const { width, height } = gameSize;
+      const newX = width - w / 2 - offsetX;
+      const newY = height - h / 2 - offsetY;
+      rect.setPosition(newX, newY);
+      label.setPosition(newX, newY);
+    });
 
     return container;
   }
