@@ -47,10 +47,10 @@ const BAR_SHIFT_X = 240;
 
 const AVATAR_W = 50;
 const AVATAR_H = 50;
-const BOTTOM_Y = HEIGHT - AVATAR_H - 30;
-const TOP_Y = AVATAR_H + 20;
-const LEFT_X = WIDTH / 3 - 250;
-const RIGHT_X = WIDTH / 3 - 250;
+const BOTTOM_Y = HEIGHT - AVATAR_H - 90;
+const TOP_Y = AVATAR_H + 80;
+const LEFT_X = WIDTH / 3 - AVATAR_W / 2;
+const RIGHT_X = WIDTH / 3 - AVATAR_W / 2;
 // ─────────────────────────────────────────────────────────────
 function hexToInt(hex) {
   try {
@@ -106,20 +106,23 @@ export class Multiplayer extends Phaser.Scene {
     super("Multiplayer");
   }
 
-  // =============== PRELOAD ==================================================
-  preload() {
-    CARDS.forEach((c) => {
-      const key = c.frame;
-      const url = `/assets/cards/${key}.png`;
-      if (!this.textures.exists(key)) this.load.image(key, url);
-    });
-  }
-
   // =============== CREATE ===================================================
   create() {
     /* ------------------------------------------------\
      | 1.  Basic UI scaffolding                        |
     \* ------------------------------------------------*/
+    this.bg = this.add.image(this.scale.width / 2, this.scale.height / 2, 'boardBg')
+      .setOrigin(0.5)
+      .setDepth(-100)
+      .setDisplaySize(this.scale.width, this.scale.height)
+      .setAlpha(0.4);
+
+    // Make responsive
+    this.scale.on('resize', (gameSize) => {
+      this.bg.setDisplaySize(gameSize.width, gameSize.height);
+      this.bg.setPosition(gameSize.width / 2, gameSize.height / 2);
+    });
+
     this.ui = new UI(this);
     this.myHand = this.add.group();
     this.oppHand = this.add.group();
@@ -362,7 +365,7 @@ export class Multiplayer extends Phaser.Scene {
   }
 
   _createLogZone() {
-    this.logZone = this.add.container(20, this.scale.height - 150); // bottom-left
+    this.logZone = this.add.container(20, this.scale.height - 152); // bottom-left
     this.logBg = this.add.rectangle(0, 0, 400, 120, 0x000000, 0.5).setOrigin(0);
     this.logZone.add(this.logBg);
 
@@ -378,18 +381,21 @@ export class Multiplayer extends Phaser.Scene {
         })
         .setOrigin(0, 0);
 
-      // Push to array and position lines
       this.logTexts.push(text);
       this.logZone.add(text);
 
-      // Shift up if exceeding max lines
+      // Remove old logs if exceeding max
       if (this.logTexts.length > this.logMaxLines) {
         const old = this.logTexts.shift();
         old.destroy();
       }
 
-      // Update Y positions for all lines
-      this.logTexts.forEach((t, i) => t.setY(10 + i * 18));
+      // ✅ Dynamically position logs based on actual height
+      let currentY = 10;
+      this.logTexts.forEach((t) => {
+        t.setY(currentY);
+        currentY += t.height + 4; // 4px padding between logs
+      });
     };
   }
 
@@ -549,8 +555,8 @@ export class Multiplayer extends Phaser.Scene {
     this.players.forEach((pEntry) => pEntry.destroy?.()); // safety if re‑joining
     this.players = [];
     const playersList = getParticipants();
-    console.log("[Multiplayer] _createAllAvatars()", playersList);
-    this.reqQueue.players.forEach((ps) => this._addAvatar(ps));
+    playersList.forEach((ps) => this._addAvatar(ps));
+    // this.reqQueue.players.forEach((ps) => this._addAvatar(ps));
   }
 
   _dealOpeningHands() {
@@ -565,15 +571,18 @@ export class Multiplayer extends Phaser.Scene {
       p.setState("hand", hand, true);
       p.setState("handReady", true, true);
       p.setState("hp", HEALTH_POINTS, true);
-      p.setState("mana", MAX_MANA, true);
-      p.setState("maxMana", MAX_MANA, true);
-      p.setState("turnCount", 1, true); // ✅ initialize turn counter
+      p.setState("mana", 1, true);
+      p.setState("maxMana", 1, true);
+      p.setState("turnCount", 0, true); // ✅ initialize turn counter
     });
 
     // pick first player
     setState("firstPlayerId", me().id, true);
     // host starts
     setState("turnPlayerId", me().id, true);
+
+    const first = this.reqQueue.players.find((p) => p.id === me().id);
+    if (first) this.turnMan.startTurn(first);
     // start game
     setState("gameStarted", true, true);
   }
@@ -606,9 +615,14 @@ export class Multiplayer extends Phaser.Scene {
         uid
       );
       this.myHand.add(card);
-      card.on("pointerup", () =>
-        myPlayer()?.setState("request", { play: uid })
-      );
+      card.on("pointerup", () => {
+        if (getState("turnPlayerId") !== myPlayer().id) {
+          this.ui.toast("⏳ Wait for your turn!");
+          this.ui.flashManaBar(); // optional little nudge
+          return;
+        }
+        myPlayer().setState("request", { play: uid });
+      });
     });
   }
 
@@ -659,14 +673,14 @@ export class Multiplayer extends Phaser.Scene {
       // draw bars (returns positions)
       const hpPos = this.ui.drawHpBar(
         this.screenMidX - BAR_SHIFT_X,
-        965,
+        this.scale.height - 60,
         hp,
         HEALTH_POINTS,
         true
       );
       const mpPos = this.ui.drawManaBar(
         this.screenMidX - BAR_SHIFT_X,
-        985,
+        this.scale.height - 40,
         mp,
         MAX_MANA,
         true
@@ -690,14 +704,14 @@ export class Multiplayer extends Phaser.Scene {
 
         const hpPos = this.ui.drawHpBar(
           this.screenMidX - BAR_SHIFT_X,
-          60,
+          10,
           oh,
           HEALTH_POINTS,
           false
         );
         const mpPos = this.ui.drawManaBar(
           this.screenMidX - BAR_SHIFT_X,
-          80,
+          30,
           om,
           MAX_MANA,
           false

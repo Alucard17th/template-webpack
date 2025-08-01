@@ -225,7 +225,7 @@ export class UI {
     });
   }
 
-  /** Draw a horizontal separator between the two boards */
+  /** Draw a horizontal separator and colored backgrounds for boards */
   drawBoardsDivider(
     myBoard,
     oppBoard,
@@ -233,9 +233,20 @@ export class UI {
   ) {
     const g = this.dividerGfx;
     const w = this.scene.scale.width;
-    const midY = Math.round(this.scene.scale.height / 2); // <-- true center
+    const h = this.scene.scale.height;
+    const midY = Math.round(h / 2);
 
     g.clear();
+
+    // 🔵 Player board background (bottom half)
+    g.fillStyle(0x003366, 0.25); // dark blue with opacity
+    g.fillRect(0, midY, w, h - midY);
+
+    // 🔴 Opponent board background (top half)
+    g.fillStyle(0x660000, 0.25); // dark red with opacity
+    g.fillRect(0, 0, w, midY);
+
+    // Divider line
     if (dashed) {
       this._strokeDashed(g, pad, midY, w - pad, {
         color: 0xff3b3b,

@@ -33,10 +33,6 @@ export class LobbyScene extends Phaser.Scene {
     super("Lobby");
   }
 
-  preload() {
-    this.load.font("Constantia", "/fonts/constan.ttf");
-  }
-
   /* -------------------------------------------------------------- */
   async create() {
     /* 1️⃣  create / join room ----------------------------------- */
@@ -47,6 +43,8 @@ export class LobbyScene extends Phaser.Scene {
       skipLobby: true,
       roomCode: urlRoom || undefined,
     });
+
+    console.log("[Lobby] am I host?", isHost());
 
     this.players = [...getParticipants()];
 
@@ -92,6 +90,9 @@ export class LobbyScene extends Phaser.Scene {
     });
 
     /* 3️⃣  UI elements ----------------------------------------- */
+    this.container = document.createElement("div");
+    document.body.appendChild(this.container);
+
     this._buildInputForm();
     this._buildRosterList();
 
@@ -191,6 +192,8 @@ export class LobbyScene extends Phaser.Scene {
       btn.disabled = true;
       btn.textContent = "✔ Ready";
     };
+
+    this.container.appendChild(wrap);
   }
 
   _buildRosterList() {
@@ -220,6 +223,8 @@ export class LobbyScene extends Phaser.Scene {
       };
       this.rosterDiv.appendChild(startBtn);
     }
+
+    this.container.appendChild(this.rosterDiv);
   }
 
   _refreshRoster() {

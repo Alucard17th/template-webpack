@@ -7,7 +7,7 @@ export class PlayerState {
     this.deck = deck;
   }
   startTurn() {
-    this.mana = Math.min(this.mana + 1, 10);
+    // this.mana = Math.min(this.mana + 1, 10);
 
     if (this.hand.length < 8) {
       const card = this.deck.draw();

@@ -13,33 +13,46 @@ export class TurnManager {
    */
   constructor(deckMap) {
     this.deckMap = deckMap;
+    this.localTurn = new Map();      // playerId → integer
+
   }
 
   /** Host only – call when a new turn starts for `player`. */
+  /** Host only – call when a new turn starts for `player`. */
   startTurn(player) {
-    const curTurn = player.getState("turnCount") || 0;
-    player.setState("turnCount", curTurn + 1, true);
-    // 1️⃣  Refresh / grow mana
-    const newMax = Math.min((player.getState("maxMana") || 0) + 1, MAX_MANA);
+    // 1. advance per-player turn counter
+    const turnCount = (player.getState("turnCount") || 0) + 1;
+    player.setState("turnCount", turnCount, true);
+
+    // 2. refill / grow mana (cap at MAX_MANA)
+    const newMax = Math.min(turnCount, MAX_MANA);
     player.setState("maxMana", newMax, true);
     player.setState("mana", newMax, true);
 
-    // 2️⃣  Reset “hasAttacked” flags for every creature on that board
-    const board = player.getState("board") || [];
+    // 3. reset attacks
     const reset = {};
-    board.forEach((uid) => (reset[uid] = false));
+    (player.getState("board") || []).forEach((uid) => (reset[uid] = false));
     player.setState("hasAttacked", reset, true);
 
-    // 3️⃣  Draw a card
+    // 4. draw a card (if hand not full)
     const deck = this.deckMap.get(player.id);
-    if (!deck) return; // should not happen
+    if (!deck) return;
     const drawn = deck.draw();
-    if (!drawn) return; // empty deck
+    if (drawn) {
+      const hand = player.getState("hand") || [];
+      if (hand.length < MAX_HAND_SIZE) {
+        hand.push(drawn.uid);
+        player.setState("hand", hand, true);
+      }
+    }
 
-    const hand = player.getState("hand") || [];
-    if (hand.length < MAX_HAND_SIZE) {
-      hand.push(drawn.uid);
-      player.setState("hand", hand, true);
-    } /* else: hand is full → burn card (Hearthstone‑style) */
+    console.log(
+      "[TurnManager] startTurn()",
+      player.id,
+      "Turn",
+      turnCount,
+      "→ mana",
+      newMax
+    );
   }
 }

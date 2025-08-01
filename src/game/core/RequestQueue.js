@@ -63,10 +63,6 @@ export class RequestQueue {
     const cost = card?.cost ?? 0;
     const mana = p.getState("mana") ?? 0;
 
-    this.log(
-      `${p.getProfile()?.name || "Player"} played ${card?.name || "a card"}`
-    );
-
     if (mana < cost) {
       p.setState("reject", { reason: "mana", card: uid }, true);
       return;
@@ -84,6 +80,10 @@ export class RequestQueue {
       bs[uid] = card.health;
       p.setState("boardState", bs, true);
     }
+
+    this.log(
+      `${p.getProfile()?.name || "Player"} played ${card?.name || "a card"}`
+    );
   }
 
   _handleAttack(p, { src, dst }) {
@@ -101,9 +101,6 @@ export class RequestQueue {
     const srcData = this.CARDS_BY_ID[src.split("#")[0]];
     if (!srcData) return;
 
-    const dstData = this.CARDS_BY_ID[dst.split("#")[0]];
-    if (!dstData) return;
-
     const isCreature = srcData.type === "creature";
     const isHealSpell = srcData.type === "spell" && (srcData.heal ?? 0) > 0;
     const isDamageSpell = srcData.type === "spell" && (srcData.damage ?? 0) > 0;
@@ -111,27 +108,14 @@ export class RequestQueue {
     const attackerName = p.getProfile()?.name || "Player";
     const defenderName = foe.getProfile()?.name || "Opponent";
     const attackerCardName = srcData?.name || "Unknown Card";
-    const defenderCardName =
-      dstData?.name || (dst === "player" ? defenderName : "Unknown Target");
 
-    // ✅ Add a more descriptive log
-    if (dst === "player") {
-      this.log(
-        `${attackerName} attacked ${defenderName} using ${attackerCardName}`
-      );
-    } else {
-      this.log(
-        `${attackerName}'s ${attackerCardName} attacked ${defenderName}'s ${defenderCardName}`
-      );
-    }
-
-    // Face attacks
+    // ✅ Face attacks FIRST (no defenderCardName needed)
     if (dst === "player") {
       if (isHealSpell) {
         const hp = p.getState("hp") ?? 0;
         p.setState("hp", Math.min(HEALTH_POINTS, hp + srcData.heal), true);
+        this.log(`${attackerName} healed themselves with ${attackerCardName}`);
       } else {
-        // only allowed if defender board empty
         if ((foe.getState("board") || []).length > 0) {
           p.setState("reject", { reason: "protectedFace" }, true);
           return;
@@ -142,23 +126,36 @@ export class RequestQueue {
           Math.max(0, (foe.getState("hp") || 0) - damage),
           true
         );
+        this.log(
+          `${attackerName} attacked ${defenderName} directly with ${attackerCardName}`
+        );
       }
       this._checkGameOver();
       this._flagAsAttacked(p, src);
       return;
     }
 
-    // Creature ↔ creature
+    // ✅ Only here we need dstData & defenderCardName
+    const dstData = this.CARDS_BY_ID[dst.split("#")[0]];
+    if (!dstData) return;
+    const defenderCardName = dstData?.name || "Unknown Target";
+
+    // Creature ↔ Creature
     if (isCreature) {
-      const dstData = this.CARDS_BY_ID[dst.split("#")[0]];
       applyCreatureDamage(src, dst, p, foe, srcData, dstData);
+      this.log(
+        `${attackerName}'s ${attackerCardName} attacked ${defenderName}'s ${defenderCardName}`
+      );
       this._flagAsAttacked(p, src);
       return;
     }
 
-    // Spell at creature / face
+    // Spell at creature
     if (isHealSpell || isDamageSpell) {
       resolveSpell(srcData, src, dst, p, foe, this.CARDS_BY_ID);
+      this.log(
+        `${attackerName} cast ${attackerCardName} on ${defenderName}'s ${defenderCardName}`
+      );
       this._checkGameOver();
       this._flagAsAttacked(p, src);
     }

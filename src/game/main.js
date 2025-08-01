@@ -34,6 +34,7 @@ const config = {
     },
   },
   scene: [
+    Preloader,
     LobbyScene,
     Multiplayer,
     // Boot,
