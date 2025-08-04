@@ -1,3 +1,4 @@
+// constants.js
 // All the magic numbers for the ruleset.
 // Change them here – every other core file imports from this module.
 

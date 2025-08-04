@@ -109,6 +109,16 @@ export class Multiplayer extends Phaser.Scene {
 
   // =============== CREATE ===================================================
   create() {
+    this.graveyardCounter = this.add.text(50, 50, "", {
+      fontSize: 18,
+      color: "#ccc",
+    });
+
+    this.updateGraveyardCount = () => {
+      const myGraveyard = myPlayer().getState("graveyard") || [];
+      this.graveyardCounter.setText(`🪦 ${myGraveyard.length}`);
+    };
+
     /* 1. basic UI scaffolding ────────────────────── */
     this.bg = this.add
       .image(this.scale.width / 2, this.scale.height / 2, "boardBg")
@@ -235,8 +245,7 @@ export class Multiplayer extends Phaser.Scene {
     this._initPointerHandlers();
     this._createLogZone();
     // 🔁 Check for animation broadcast
-    this.lastAnimEvent = null;
-
+    this._lastAnimEvent = null;
 
     // 🔄 Watch for deck size changes for all players
     this.time.addEvent({
@@ -261,6 +270,7 @@ export class Multiplayer extends Phaser.Scene {
     this._syncRejects();
 
     this._playCardAnimation();
+    this.updateGraveyardCount();
 
     const resetFlag = getState("resetGame");
     if (resetFlag && this._lastResetFlag !== resetFlag) {

@@ -91,6 +91,13 @@ export class RequestQueue {
       p.setState("boardState", bs, true);
     }
 
+    // ✅ Add to graveyard if spell
+    if (card?.type === "spell") {
+      const graveyard = p.getState("graveyard") || [];
+      graveyard.push(uid);
+      p.setState("graveyard", graveyard, true);
+    }
+
     this.log(
       `${p.getProfile()?.name || "Player"} played ${card?.name || "a card"}`
     );
@@ -114,6 +121,7 @@ export class RequestQueue {
       if (!defender) return;
 
       attacker.attacked = true;
+      this._flagAsAttacked(p, src);
 
       defender.hp -= attacker.atk;
       attacker.hp -= defender.atk;
@@ -122,12 +130,22 @@ export class RequestQueue {
         const i = oppBoard.indexOf(dst);
         oppBoard.splice(i, 1);
         delete oppBoardState[dst];
+
+        // ✅ Add to graveyard
+        const oppGraveyard = opponent.getState("graveyard") || [];
+        oppGraveyard.push(dst);
+        opponent.setState("graveyard", oppGraveyard, true);
       }
 
       if (attacker.hp <= 0) {
         const i = srcBoard.indexOf(src);
         srcBoard.splice(i, 1);
         delete myBoardState[src];
+
+        // ✅ Add to graveyard
+        const myGraveyard = p.getState("graveyard") || [];
+        myGraveyard.push(src);
+        p.setState("graveyard", myGraveyard, true);
       }
 
       // ✅ Sync board states
@@ -153,6 +171,7 @@ export class RequestQueue {
     if (dst === "player") {
       const hp = opponent?.getState("hp") ?? 0;
       attacker.attacked = true;
+      this._flagAsAttacked(p, src); 
       opponent?.setState("hp", hp - attacker.atk, true);
       p.setState("boardState", myBoardState, true);
 
@@ -175,6 +194,10 @@ export class RequestQueue {
     if (!next) return;
     setState("turnPlayerId", next.id, true);
     this.turnManager.startTurn(next);
+  }
+
+  _getOpponent(p) {
+    return this.players.find((player) => player.id !== p.id);
   }
 
   _flagAsAttacked(p, uid) {
