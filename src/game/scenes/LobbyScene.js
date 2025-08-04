@@ -1,13 +1,6 @@
-/*********************************************************************
- *  LobbyScene.js  –  custom lobby for Playroom (skipLobby:true)
- *********************************************************************/
-
 import Phaser from "phaser";
-// import QRCode from 'qrcode';            // npm i qrcode  (tiny pure‑js lib)
-
 import {
   insertCoin,
-  me,
   myPlayer,
   getRoomCode,
   onPlayerJoin,
@@ -16,7 +9,6 @@ import {
   getState,
   setState,
 } from "playroomkit";
-
 import multiavatar from "@multiavatar/multiavatar/esm";
 
 function generateRandomAvatar() {
@@ -33,95 +25,43 @@ export class LobbyScene extends Phaser.Scene {
     super("Lobby");
   }
 
-  /* -------------------------------------------------------------- */
   async create() {
-    /* 1️⃣  create / join room ----------------------------------- */
     const urlRoom = new URLSearchParams(window.location.hash.slice(1)).get(
       "room"
     );
-    await insertCoin({
-      skipLobby: true,
-      roomCode: urlRoom || undefined,
-    });
-
-    console.log("[Lobby] am I host?", isHost());
+    await insertCoin({ skipLobby: true, roomCode: urlRoom || undefined });
 
     this.players = [...getParticipants()];
+    this.roomCode = getRoomCode();
 
-    const roomCode = getRoomCode();
-
-    /* 2️⃣  basic text + QR code -------------------------------- */
-    this.add
-      .text(960, 80, `Room Code: ${roomCode}`, {
-        fontSize: 32,
-        color: "#fff",
-        fontFamily: "Constantia",
-      })
-      .setOrigin(0.5);
-
-    // tiny canvas for QR
-    // const qrCanvas = document.createElement('canvas');
-    // qrCanvas.style.position = 'absolute';
-    // qrCanvas.style.left = '50%'; qrCanvas.style.top = '140px'; qrCanvas.style.transform='translateX(-50%)';
-    // document.body.appendChild(qrCanvas);
-    // QRCode.toCanvas(qrCanvas, roomCode, { width:180 });
-
-    // ✅ Add copy invitation button
-    const copyBtn = document.createElement("button");
-    copyBtn.textContent = "Copy Invitation Link";
-    copyBtn.classList.add("lobby-btn");
-    copyBtn.style.position = "absolute";
-    copyBtn.style.top = "150px";
-    copyBtn.style.left = "50%";
-    copyBtn.style.transform = "translateX(-50%)";
-    copyBtn.onclick = () => {
-      const inviteUrl = `${window.location.origin}${window.location.pathname}#room=${roomCode}`;
-      navigator.clipboard.writeText(inviteUrl).then(() => {
-        copyBtn.textContent = "✔ Link Copied!";
-        setTimeout(() => (copyBtn.textContent = "Copy Invitation Link"), 1500);
-      });
-    };
-    document.body.appendChild(copyBtn);
-
-    // Cleanup button on scene shutdown
-    this.events.once("shutdown", () => {
-      if (copyBtn && copyBtn.parentElement)
-        copyBtn.parentElement.removeChild(copyBtn);
-    });
-
-    /* 3️⃣  UI elements ----------------------------------------- */
+    /* ✅ Main container */
     this.container = document.createElement("div");
+    this.container.classList.add("lobby-container");
     document.body.appendChild(this.container);
 
+    /* ✅ Sections */
+    this._buildRoomCodeSection();
+    this._buildLogoSection();
     this._buildInputForm();
     this._buildRosterList();
 
-    /* 4️⃣  react to new players -------------------------------- */
-    /* track others */
     onPlayerJoin((p) => {
-      // called for others (and MAYBE host)
-      if (!this.players.find((x) => x.id === p.id))
-        // guard against duplicate push
-        this.players.push(p);
+      if (!this.players.find((x) => x.id === p.id)) this.players.push(p);
       this._refreshRoster();
-      this._checkIfReadyAndStart(); // re‑evaluate readiness
+      this._checkIfReadyAndStart();
     });
-    // onPlayerQuit((p) => {
-    //   this.players = this.players.filter((x) => x.id !== p.id);
-    //   this._refreshRoster();
-    // });
+
     this.time.addEvent({
       delay: 500,
       loop: true,
       callback: () => this._refreshRoster(),
     });
 
-    /* Poll for the 'startGame' flag and switch scenes */
     this.time.addEvent({
       delay: 300,
       loop: true,
       callback: () => {
-        if (isHost()) this._checkIfReadyAndStart(); // host keeps checking
+        if (isHost()) this._checkIfReadyAndStart();
         if (getState("startGame")) this.scene.start("Multiplayer");
       },
     });
@@ -129,37 +69,70 @@ export class LobbyScene extends Phaser.Scene {
     this.events.once("shutdown", () => this._cleanupDOM());
   }
 
-  /* ----------- DOM helpers (pure JavaScript, no Phaser DOM) ---- */
-  /* UI elements ----------------------------------------- */
+  /* ✅ Top Column: Room Code */
+  _buildRoomCodeSection() {
+    /* ✅ Room Code Banner */
+    const roomCodeDiv = document.createElement("div");
+    roomCodeDiv.classList.add("room-code");
+
+    const codeText = document.createElement("span");
+    codeText.textContent = `Room Code: ${this.roomCode}`;
+    roomCodeDiv.appendChild(codeText);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "Copy Link";
+    copyBtn.classList.add("copy-btn");
+    copyBtn.onclick = () => {
+      const inviteUrl = `${window.location.origin}${window.location.pathname}#room=${this.roomCode}`;
+      navigator.clipboard.writeText(inviteUrl).then(() => {
+        copyBtn.textContent = "✔ Copied!";
+        setTimeout(() => (copyBtn.textContent = "Copy Link"), 1500);
+      });
+    };
+    roomCodeDiv.appendChild(copyBtn);
+
+    this.container.appendChild(roomCodeDiv);
+  }
+
+  /* ✅ Left Column: Logo */
+  _buildLogoSection() {
+    const wrap = document.createElement("div");
+    wrap.classList.add("lobby-logo");
+
+    const logoImg = document.createElement("img");
+    logoImg.src = "./assets/logo-1.png";
+    logoImg.classList.add("lobby-logo-img");
+    wrap.appendChild(logoImg);
+
+    const gameTitle = document.createElement("h1");
+    gameTitle.textContent = "Mystic Sigils";
+    gameTitle.classList.add("lobby-logo-title");
+    wrap.appendChild(gameTitle);
+
+    const tagline = document.createElement("p");
+    tagline.textContent = "Assemble your deck. Conquer the arena!";
+    tagline.classList.add("lobby-logo-tagline");
+    wrap.appendChild(tagline);
+
+    this.container.appendChild(wrap);
+  }
+
+  /* ✅ Middle Column: Input Form */
   _buildInputForm() {
     const wrap = document.createElement("div");
     wrap.classList.add("lobby-form");
-    document.body.appendChild(wrap);
 
-    // Name input
     const name = document.createElement("input");
-    name.placeholder = "Your name";
+    name.placeholder = "Enter your name";
     name.maxLength = 12;
     name.classList.add("lobby-input");
     wrap.appendChild(name);
-
-    // // Color picker
-    // const color = document.createElement("input");
-    // color.type = "color";
-    // color.value =
-    //   "#" +
-    //   Math.floor(Math.random() * 0xffffff)
-    //     .toString(16)
-    //     .padStart(6, "0");
-    // wrap.appendChild(color);
 
     let currentAvatar = generateRandomAvatar();
 
     const avatarImg = document.createElement("img");
     avatarImg.src = currentAvatar.dataURL;
-    avatarImg.width = 80;
-    avatarImg.height = 80;
-    avatarImg.classList.add("avatar-img");
+    avatarImg.classList.add("avatar-img-large");
     wrap.appendChild(avatarImg);
 
     const randomBtn = document.createElement("button");
@@ -171,47 +144,72 @@ export class LobbyScene extends Phaser.Scene {
     };
     wrap.appendChild(randomBtn);
 
-    // Ready button
-    const btn = document.createElement("button");
-    btn.textContent = "Ready ✔";
-    btn.classList.add("lobby-btn");
-    wrap.appendChild(btn);
+    const readyBtn = document.createElement("button");
+    readyBtn.textContent = "✔ Ready";
+    readyBtn.classList.add("lobby-btn", "primary");
+    readyBtn.onclick = async () => {
+      let chosenName = name.value.trim();
 
-    btn.onclick = async () => {
+      // ✅ If input is empty, use the player's default profile name or generate one
+      if (!chosenName) {
+        const defaultName = myPlayer().getProfile()?.name; // PlayroomKit auto name
+        chosenName = defaultName || `Player${Math.floor(Math.random() * 1000)}`;
+      }
+
+      // 🔍 Check for duplicates
+      const participants = getParticipants();
+      const nameTaken = participants.some((p) => {
+        if (p.id === myPlayer().id) return false;
+        const prof = p.getState("profile") || {};
+        return (
+          prof.name && prof.name.toLowerCase() === chosenName.toLowerCase()
+        );
+      });
+
+      if (nameTaken) {
+        alert(
+          `⚠️ The name "${chosenName}" is already taken. Please choose another.`
+        );
+        return;
+      }
+
       myPlayer().setState(
         "profile",
         {
-          name: name.value || "Player",
-          // color: color?.value || "#000",
+          name: chosenName,
           color: "#000",
-          avatar: currentAvatar.dataURL, // Store SVG as data URL
+          avatar: currentAvatar.dataURL,
         },
         true
       );
       myPlayer().setState("ready", true, true);
-      btn.disabled = true;
-      btn.textContent = "✔ Ready";
+      readyBtn.disabled = true;
+      readyBtn.textContent = "✔ Waiting...";
     };
+    wrap.appendChild(readyBtn);
 
     this.container.appendChild(wrap);
   }
 
+  /* ✅ Right Column: Roster */
   _buildRosterList() {
     this.rosterDiv = document.createElement("div");
     this.rosterDiv.classList.add("roster-list");
-    document.body.appendChild(this.rosterDiv);
+
+    const title = document.createElement("h3");
+    title.textContent = "Players";
+    title.classList.add("roster-title");
+    this.rosterDiv.appendChild(title);
 
     this.listDiv = document.createElement("div");
+    this.listDiv.classList.add("roster-players");
     this.rosterDiv.appendChild(this.listDiv);
 
-    /* host-only start button */
     if (isHost()) {
       const startBtn = document.createElement("button");
       startBtn.textContent = "Start Game";
-      startBtn.style.marginTop = "16px";
-      startBtn.classList.add("lobby-btn");
+      startBtn.classList.add("lobby-btn", "start-btn");
       startBtn.onclick = () => {
-        // only allow if all ready & at least 2 players
         const allReady =
           this.players.length >= 2 &&
           this.players.every((p) => p.getState("ready"));
@@ -232,43 +230,24 @@ export class LobbyScene extends Phaser.Scene {
     this.listDiv.innerHTML = this.players
       .map((p) => {
         const prof = p.getState("profile") || {};
-        const ready = p.getState("ready") ? "✅" : "⌛";
+        const ready = p.getState("ready") ? "✅ Ready" : "⌛ Waiting";
         const name = prof.name || "Player";
         const avatar = prof.avatar
-          ? `<img src="${
-              prof.avatar
-            }" width="40" height="40" class="avatar-img" style="border-radius:50%;border:2px solid ${
-              prof.color || "#fff"
-            }">`
+          ? `<img src="${prof.avatar}" class="avatar-img-small">`
           : "👤";
-        return `<div class="roster-player">
-                ${ready} ${avatar} <span>${name}</span>
-            </div>`;
+        return `<div class="roster-player">${avatar}<span>${name}</span><span class="player-status">${ready}</span></div>`;
       })
       .join("");
   }
 
   _checkIfReadyAndStart() {
-    const everybodyReady =
+    const allReady =
       this.players.length >= 2 &&
       this.players.every((p) => p.getState("ready"));
-
-    if (everybodyReady && isHost()) {
-      // write once; Playroom replicates to everyone
-      setState("startGame", true, true);
-    }
+    if (allReady && isHost()) setState("startGame", true, true);
   }
 
-  /* ------------ cleanup when scene shuts down ---------------- */
   _cleanupDOM() {
-    // Remove all elements with the "lobby-form" class (input, avatar, randomize, ready button container)
-    document.querySelectorAll(".lobby-form").forEach((el) => el.remove());
-
-    // Remove the roster list container
-    document.querySelectorAll(".roster-list").forEach((el) => el.remove());
-
-    // Remove any QR canvas if it exists
-    const qrCanvas = document.querySelector('canvas[style*="top: 140px"]');
-    if (qrCanvas) qrCanvas.remove();
+    document.querySelectorAll(".lobby-container").forEach((el) => el.remove());
   }
 }

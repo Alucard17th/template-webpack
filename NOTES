@@ -1,0 +1,11 @@
+🚀 What I suggest next:
+
+Add restart/game reset button after Game Over. XXX
+
+Add mana/maxMana display in UI. XXX
+
+Handle deck-empty scenarios gracefully. XXX
+
+Add minimal animations for card play & attack (biggest visual upgrade).
+
+Store name/avatar in localStorage so returning players don’t have to set them again.

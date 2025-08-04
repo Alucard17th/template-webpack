@@ -17,6 +17,7 @@ import {
 } from "playroomkit";
 
 import { CARDS, CARDS_BY_ID } from "../../data/cards.js";
+import { CARD_WIDTH, CARD_HEIGHT } from "../core/constants.js";
 import { buildDeck } from "../../helpers/deckUtils.js";
 import { Deck } from "../../logic/Deck.js";
 
@@ -27,9 +28,12 @@ import { PlaceholderCard } from "../objects/PlaceholderCard.js";
 import {
   START_HAND_SIZE,
   DECK_COPIES,
+  STARTING_MANA,
   MAX_MANA,
   HEALTH_POINTS,
   TICK_MS,
+  MY_HAND_Y,
+  OPP_HAND_Y,
 } from "../core/constants.js";
 
 import { TurnManager } from "../core/TurnManager.js";
@@ -40,17 +44,15 @@ import { RequestQueue } from "../core/RequestQueue.js";
 // ─────────────────────────────────────────────────────────────
 const WIDTH = 1920;
 const HEIGHT = 1080;
-
-const MY_HAND_Y = 985;
-const OPP_HAND_Y = 80;
 const BAR_SHIFT_X = 240;
-
 const AVATAR_W = 50;
 const AVATAR_H = 50;
 const BOTTOM_Y = HEIGHT - AVATAR_H - 90;
 const TOP_Y = AVATAR_H + 80;
 const LEFT_X = WIDTH / 3 - AVATAR_W / 2;
 const RIGHT_X = WIDTH / 3 - AVATAR_W / 2;
+const DECK_X = WIDTH / 1.28;
+const FACE_ZONE_SCALE = 1.8; //  ➟  how wide the hit‑box is vs avatar
 // ─────────────────────────────────────────────────────────────
 function hexToInt(hex) {
   try {
@@ -80,7 +82,6 @@ function loadBase64Texture(scene, key, dataUrl) {
     img.src = dataUrl; // supports data:image/svg+xml, data:image/png, etc.
   });
 }
-const FACE_ZONE_SCALE = 1.8; //  ➟  how wide the hit‑box is vs avatar
 function makeFaceZone(scene, sprite, owner) {
   const r = (AVATAR_W / 2) * FACE_ZONE_SCALE;
   const z = scene.add
@@ -108,91 +109,94 @@ export class Multiplayer extends Phaser.Scene {
 
   // =============== CREATE ===================================================
   create() {
-    /* ------------------------------------------------\
-     | 1.  Basic UI scaffolding                        |
-    \* ------------------------------------------------*/
-    this.bg = this.add.image(this.scale.width / 2, this.scale.height / 2, 'boardBg')
+    /* 1. basic UI scaffolding ────────────────────── */
+    this.bg = this.add
+      .image(this.scale.width / 2, this.scale.height / 2, "boardBg")
       .setOrigin(0.5)
       .setDepth(-100)
       .setDisplaySize(this.scale.width, this.scale.height)
       .setAlpha(0.4);
 
-    // Make responsive
-    this.scale.on('resize', (gameSize) => {
-      this.bg.setDisplaySize(gameSize.width, gameSize.height);
-      this.bg.setPosition(gameSize.width / 2, gameSize.height / 2);
+    this.scale.on("resize", (gs) => {
+      this.bg
+        .setDisplaySize(gs.width, gs.height)
+        .setPosition(gs.width / 2, gs.height / 2);
     });
 
     this.ui = new UI(this);
     this.myHand = this.add.group();
     this.oppHand = this.add.group();
     this.myBoard = new Board(this, myPlayer()?.id, true);
-    this.oppBoard = null; // when opponent joins
+    this.oppBoard = null;
 
-    // text style once – adjust to taste
     const statStyle = { fontSize: 18, color: "#fff", fontFamily: "sans-serif" };
-
-    // my side
     this.myHpTxt = this.add
       .text(0, 0, "", statStyle)
       .setOrigin(1, 0.5)
-      .setDepth(9_000);
+      .setDepth(9000);
     this.myManaTxt = this.add
       .text(0, 0, "", statStyle)
       .setOrigin(1, 0.5)
-      .setDepth(9_000);
-
-    // opponent
+      .setDepth(9000);
     this.oppHpTxt = this.add
       .text(0, 0, "", statStyle)
       .setOrigin(1, 0.5)
-      .setDepth(9_000);
+      .setDepth(9000);
     this.oppManaTxt = this.add
       .text(0, 0, "", statStyle)
       .setOrigin(1, 0.5)
-      .setDepth(9_000);
+      .setDepth(9000);
 
+    this._createUiElements();
     this.screenMidX = (this.scale.width - 360) / 2;
 
-    /* ------------------------------------------------\
-     | 2.  Prepare core helpers                        |
-    \* ------------------------------------------------*/
+    /* 2. core helpers ────────────────────────────── */
     this.deckMap = new Map(); // playerId → Deck
-    this.turnMan = new TurnManager(this.deckMap);
-    this.reqQueue = new RequestQueue(
-      [], // roster will be filled later
-      this.turnMan,
-      CARDS_BY_ID,
-      (msg) => this.addLog(msg)
+    this.turnMan = new TurnManager(this, this.deckMap);
+    this.reqQueue = new RequestQueue([], this.turnMan, CARDS_BY_ID, (msg) =>
+      this.addLog(msg)
     );
 
-    /* ------------------------------------------------\
-     | 3.  Player join                                 |
-    \* ------------------------------------------------*/
-    onPlayerJoin((ps) => {
-      // build a shuffled deck for *each* new player
+    /* 2.a host must create its own deck immediately */
+    if (isHost()) {
+      const self = myPlayer();
       const deck = new Deck(buildDeck(CARDS, DECK_COPIES)).shuffle();
-      this.deckMap.set(ps.id, deck);
+      this.deckMap.set(self.id, deck);
+      self.setState("deckSize", deck.size(), true); // 5
+      this.reqQueue.players.push(self);
+    }
 
-      // first one to join becomes host’s opponent etc.
+    /* 3. player join ─────────────────────────────── */
+    onPlayerJoin((ps) => {
+      /* only host owns / mutates decks – but skip self (already done) */
+      if (isHost() && ps.id !== me().id) {
+        const deck = new Deck(buildDeck(CARDS, DECK_COPIES)).shuffle();
+        this.deckMap.set(ps.id, deck);
+        ps.setState("deckSize", deck.size(), true);
+      }
+
+      this._updateDeckCounters();
+
       if (ps.id !== me().id) {
         this.oppState = ps;
         this.oppBoard = new Board(this, ps.id, false, ps);
         this.ui.drawBoardsDivider(this.myBoard, this.oppBoard);
       }
 
-      this.reqQueue.players.push(ps); // register into RequestQueue roster
+      /* push only if new, and start the game *only* on a real addition */
+      let added = false;
+      if (!this.reqQueue.players.some((p) => p.id === ps.id)) {
+        this.reqQueue.players.push(ps);
+        added = true;
+      }
 
-      // once both present, host deals starting hands
-      if (isHost() && this.reqQueue.players.length === 2) {
+      if (isHost() && added && this.reqQueue.players.length === 2) {
         this._dealOpeningHands();
         setState("logs", [], true); // clear old logs
       }
     });
 
-    /* ------------------------------------------------\
-     | 4.  Host‑only tick to process rules             |
-    \* ------------------------------------------------*/
+    /* 4. host tick ──────────────────────────────── */
     if (isHost()) {
       this.time.addEvent({
         delay: TICK_MS,
@@ -201,28 +205,19 @@ export class Multiplayer extends Phaser.Scene {
       });
     }
 
-    /* ------------------------------------------------\
-     | 5.  End‑turn button + turn‑indicator            |
-    \* ------------------------------------------------*/
+    /* 5. turn UI etc. (unchanged) ───────────────── */
     this.endBtn = this.ui.createEndTurnButton();
-    // Get the button's center
-    const btnBounds = this.endBtn.getBounds();
-    const x = btnBounds.centerX;
-    const y = btnBounds.top - 10; // 10px above the button
-
+    const b = this.endBtn.getBounds();
     this.turnText = this.add
-      .text(x, y, "", {
+      .text(b.centerX, b.top - 10, "", {
         fontSize: 22,
         color: "#fff",
       })
-      .setOrigin(0.5, 1); // Center horizontally, align bottom to the y position
+      .setOrigin(0.5, 1);
 
-    // 🔄 Update position on resize
     this.scale.on("resize", () => {
-      const bounds = this.endBtn.getBounds();
-      const newX = bounds.centerX;
-      const newY = bounds.top - 10;
-      this.turnText.setPosition(newX, newY);
+      const nb = this.endBtn.getBounds();
+      this.turnText.setPosition(nb.centerX, nb.top - 10);
     });
 
     this.time.addEvent({
@@ -239,6 +234,16 @@ export class Multiplayer extends Phaser.Scene {
 
     this._initPointerHandlers();
     this._createLogZone();
+    // 🔁 Check for animation broadcast
+    this.lastAnimEvent = null;
+
+
+    // 🔄 Watch for deck size changes for all players
+    this.time.addEvent({
+      delay: 200,
+      loop: true,
+      callback: () => this._updateDeckCounters(),
+    });
   }
 
   // =============== UPDATE ===================================================
@@ -252,7 +257,21 @@ export class Multiplayer extends Phaser.Scene {
     this._syncBoards();
     this._syncBars();
     this._syncBoardState();
+    this._syncToasts();
     this._syncRejects();
+
+    this._playCardAnimation();
+
+    const resetFlag = getState("resetGame");
+    if (resetFlag && this._lastResetFlag !== resetFlag) {
+      this._lastResetFlag = resetFlag;
+
+      if (this.gameOverContainer) {
+        this.gameOverContainer.destroy(true);
+        this.gameOverContainer = null;
+      }
+      this.gameOverShown = false;
+    }
 
     /* stop updating if game over */
     if (getState("gameOver")) {
@@ -275,11 +294,13 @@ export class Multiplayer extends Phaser.Scene {
 
         const atkData = CARDS_BY_ID[this.pendingAttacker.cardId];
         const healSpell = atkData.type === "spell" && (atkData.heal ?? 0) > 0;
+        const manaSpell =
+          atkData.type === "spell" && (atkData.boostMana ?? 0) > 0;
         const offensive = !healSpell;
 
         if (obj.owner === "me") {
           // clicking my face
-          if (!healSpell) {
+          if (!healSpell && !manaSpell) {
             this.ui.toast("You can only heal yourself");
             return;
           }
@@ -337,14 +358,23 @@ export class Multiplayer extends Phaser.Scene {
 
       const targetIsMine = this.myBoard.contains(card);
 
-      if (targetIsMine && !healSpell) {
+      const boostSpell =
+        CARDS_BY_ID[this.pendingAttacker.cardId].type === "spell" &&
+        (CARDS_BY_ID[this.pendingAttacker.cardId].boostAttack ?? 0) > 0;
+
+      if (targetIsMine && !healSpell && !boostSpell) {
         this.ui.toast("Cannot target your own card.");
         return;
       }
-      if (!targetIsMine && healSpell) {
-        this.ui.toast("Heal can only target friendly units.");
+      if (!targetIsMine && (healSpell || boostSpell)) {
+        this.ui.toast("This spell can only target friendly units.");
         return;
       }
+
+      // if (!targetIsMine && healSpell) {
+      //   this.ui.toast("Heal can only target friendly units.");
+      //   return;
+      // }
 
       myPlayer().setState("request", {
         attack: { src: this.pendingAttacker.uid, dst: card.uid },
@@ -364,13 +394,130 @@ export class Multiplayer extends Phaser.Scene {
     });
   }
 
+  _createUiElements() {
+    // === My Deck UI ===
+    const myDeckBoxWidth = CARD_WIDTH;
+    const myDeckBoxHeight = CARD_HEIGHT;
+    const myDeckX = DECK_X;
+    const myDeckY = MY_HAND_Y - myDeckBoxHeight / 2;
+
+    // Draw rectangle (visual deck)
+    this.myDeckBg = this.add
+      .rectangle(
+        myDeckX,
+        myDeckY,
+        myDeckBoxWidth,
+        myDeckBoxHeight,
+        0x000000,
+        0.5
+      )
+      .setOrigin(0, 0)
+      .setDepth(4999);
+
+    // ✅ Add red border around my deck
+    this.myDeckBorder = this.add.graphics();
+    this.myDeckBorder
+      .lineStyle(3, 0xff0000, 1) // (thickness, color, alpha)
+      .strokeRect(myDeckX, myDeckY, myDeckBoxWidth, myDeckBoxHeight)
+      .setDepth(5001);
+
+    // Deck counter text centered inside
+    this.myDeckCounter = this.add
+      .text(myDeckX + myDeckBoxWidth / 2, myDeckY + myDeckBoxHeight / 2, "0", {
+        fontSize: 26,
+        color: "#fff",
+        fontFamily: "sans-serif",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5)
+      .setDepth(5000);
+
+    // === Opponent Deck UI ===
+    const oppDeckBoxWidth = CARD_WIDTH;
+    const oppDeckBoxHeight = CARD_HEIGHT;
+    const oppDeckX = DECK_X;
+    const oppDeckY = 20;
+
+    this.oppDeckBg = this.add
+      .rectangle(
+        oppDeckX,
+        oppDeckY,
+        oppDeckBoxWidth,
+        oppDeckBoxHeight,
+        0x000000,
+        0.5
+      )
+      .setOrigin(0, 0)
+      .setDepth(4999);
+
+    // ✅ Add red border around opponent deck
+    this.oppDeckBorder = this.add.graphics();
+    this.oppDeckBorder
+      .lineStyle(3, 0xff0000, 1)
+      .strokeRect(oppDeckX, oppDeckY, oppDeckBoxWidth, oppDeckBoxHeight)
+      .setDepth(5001);
+
+    // this.oppDeckCounter = this.add
+    //   .text(
+    //     oppDeckX + oppDeckBoxWidth / 2,
+    //     oppDeckY + oppDeckBoxHeight / 2,
+    //     "0",
+    //     {
+    //       fontSize: 20,
+    //       color: "#fff",
+    //       fontFamily: "sans-serif",
+    //       fontStyle: "bold",
+    //     }
+    //   )
+    //   .setOrigin(0.5)
+    //   .setDepth(5000);
+  }
+
   _createLogZone() {
-    this.logZone = this.add.container(20, this.scale.height - 152); // bottom-left
+    // Container & background
+    this.logZone = this.add.container(20, this.scale.height - 150);
     this.logBg = this.add.rectangle(0, 0, 400, 120, 0x000000, 0.5).setOrigin(0);
     this.logZone.add(this.logBg);
 
+    // ✅ Create inner container for actual logs
+    this.logContent = this.add.container(0, 10);
+    this.logZone.add(this.logContent);
+
+    // ✅ Create a mask to limit visible area
+    const shape = this.add
+      .graphics()
+      .fillRect(20, this.scale.height - 150, 400, 120)
+      .setVisible(false);
+    const mask = shape.createGeometryMask();
+    this.logZone.setMask(mask);
+
+    // Card details above logs
+    this.cardDetailZone = this.add.container(20, this.scale.height - 280);
+    this.cardDetailBg = this.add
+      .rectangle(0, 0, 400, 100, 0x000000, 0.7)
+      .setOrigin(0);
+    this.cardDetailZone.add(this.cardDetailBg);
+    this.cardDetailText = this.add
+      .text(10, 10, "Hover a card to see details", {
+        fontSize: 18,
+        color: "#fff",
+        wordWrap: { width: 380 },
+      })
+      .setOrigin(0, 0);
+    this.cardDetailZone.add(this.cardDetailText);
+
+    // Logs array
     this.logTexts = [];
-    this.logMaxLines = 6; // number of visible log entries
+    this.logMaxLines = 50; // store more logs now
+
+    this.scrollOffset = 0;
+    this.scrollStep = 20;
+
+    // ✅ Add scroll wheel control
+    this.input.on("wheel", (pointer, gameObjects, deltaX, deltaY) => {
+      this.scrollOffset -= deltaY * 0.5; // smooth scrolling
+      this._updateLogScroll();
+    });
 
     this.addLog = (message) => {
       const text = this.add
@@ -382,21 +529,49 @@ export class Multiplayer extends Phaser.Scene {
         .setOrigin(0, 0);
 
       this.logTexts.push(text);
-      this.logZone.add(text);
+      this.logContent.add(text);
 
-      // Remove old logs if exceeding max
-      if (this.logTexts.length > this.logMaxLines) {
-        const old = this.logTexts.shift();
-        old.destroy();
+      this._repositionLogs();
+
+      // ✅ Always scroll to bottom after adding
+      const totalHeight = this.logTexts.reduce(
+        (sum, t) => sum + t.height + 4,
+        0
+      );
+      const visibleHeight = 120;
+      const padding = 8;
+      if (totalHeight > visibleHeight) {
+        // Scroll to show the new message with padding
+        this.scrollOffset = visibleHeight - totalHeight - padding;
+        this._updateLogScroll();
       }
-
-      // ✅ Dynamically position logs based on actual height
-      let currentY = 10;
-      this.logTexts.forEach((t) => {
-        t.setY(currentY);
-        currentY += t.height + 4; // 4px padding between logs
-      });
     };
+  }
+
+  // ✅ Reposition all logs
+  _repositionLogs() {
+    let currentY = 0;
+    this.logTexts.forEach((t) => {
+      t.setY(currentY);
+      currentY += t.height + 4;
+    });
+  }
+
+  // ✅ Apply scroll offset with limits
+  _updateLogScroll() {
+    if (this.logTexts.length === 0) return;
+
+    const totalHeight = this.logTexts.reduce((sum, t) => sum + t.height + 4, 0);
+    const visibleHeight = 120;
+    const padding = 8; // Add some padding at the bottom
+
+    // Calculate max scroll offset (negative value)
+    const maxScroll = visibleHeight - totalHeight - padding;
+
+    // Clamp the scroll offset
+    this.scrollOffset = Math.min(0, Math.max(maxScroll, this.scrollOffset));
+
+    this.logContent.y = 10 + this.scrollOffset;
   }
 
   _addAvatar(playerState) {
@@ -405,7 +580,6 @@ export class Multiplayer extends Phaser.Scene {
     const startY = isMe ? BOTTOM_Y : TOP_Y;
 
     const profile = playerState.getProfile() ?? {};
-    console.log("[Multiplayer] _addAvatar()", playerState, profile);
     const name = profile.name || (isMe ? "You" : "Opponent");
     const ringColor = hexToInt(profile.color || "#ffffff");
     const photo = profile.photo || profile.avatar;
@@ -465,7 +639,6 @@ export class Multiplayer extends Phaser.Scene {
     const zone = makeFaceZone(this, sprite, isMe ? "me" : "opponent");
 
     const refreshFromProfile = (prof = {}) => {
-      console.log("[Multiplayer] refreshFromProfile()", prof);
       nameText.setText(prof.name || (isMe ? "You" : "Opponent"));
 
       const col = hexToInt(prof.color || "#ffffff");
@@ -526,13 +699,6 @@ export class Multiplayer extends Phaser.Scene {
           this.physics.add.existing(img);
           img.body.setCircle((AVATAR_W / 2) * (img.scaleX || 1));
           img.body.setCollideWorldBounds(true);
-
-          console.log(
-            "[Multiplayer] avatar image ready:",
-            texKey,
-            src.width,
-            src.height
-          );
         })
         .catch((err) => {
           console.warn("[Multiplayer] avatar load failed:", err);
@@ -560,30 +726,36 @@ export class Multiplayer extends Phaser.Scene {
   }
 
   _dealOpeningHands() {
-    // host draws START_HAND_SIZE cards for each player
     this.reqQueue.players.forEach((p) => {
       const deck = this.deckMap.get(p.id);
+      if (!deck) {
+        console.warn("No deck found for player:", p.id);
+        return;
+      }
+
       const hand = [];
       for (let i = 0; i < START_HAND_SIZE; i++) {
         const card = deck.draw();
         if (card) hand.push(card.uid);
       }
+
       p.setState("hand", hand, true);
+      p.setState("deckSizeSelf", deck.size(), true); // ✅ fixed
       p.setState("handReady", true, true);
       p.setState("hp", HEALTH_POINTS, true);
-      p.setState("mana", 1, true);
-      p.setState("maxMana", 1, true);
-      p.setState("turnCount", 0, true); // ✅ initialize turn counter
+      p.setState("mana", STARTING_MANA, true);
+      p.setState("maxMana", STARTING_MANA, true);
+      p.setState("turnCount", 0, true);
     });
 
-    // pick first player
+    this.time.delayedCall(100, () => this._updateDeckCounters(), [], this);
+
     setState("firstPlayerId", me().id, true);
-    // host starts
     setState("turnPlayerId", me().id, true);
 
     const first = this.reqQueue.players.find((p) => p.id === me().id);
     if (first) this.turnMan.startTurn(first);
-    // start game
+
     setState("gameStarted", true, true);
   }
 
@@ -615,6 +787,12 @@ export class Multiplayer extends Phaser.Scene {
         uid
       );
       this.myHand.add(card);
+
+      card.on("pointerover", () => {
+        const baseId = card.uid.split("#")[0];
+        const cardData = CARDS_BY_ID[baseId];
+        if (cardData) this._updateCardDetails(cardData);
+      });
       card.on("pointerup", () => {
         if (getState("turnPlayerId") !== myPlayer().id) {
           this.ui.toast("⏳ Wait for your turn!");
@@ -623,40 +801,77 @@ export class Multiplayer extends Phaser.Scene {
         }
         myPlayer().setState("request", { play: uid });
       });
+      card.on("pointerout", () => {
+        this.cardDetailText.setText("Hover a card to see details");
+      });
     });
+
+    // check if deck is empty
+    const deckEmpty = myPlayer()?.getState("deckEmpty");
+    if (deckEmpty) {
+      this.ui.toast("⚠️ Your deck is empty!");
+    }
   }
 
   _syncBoards() {
-    // own board
+    /* ---------- My Board ---------- */
     const meBoard = myPlayer()?.getState("board") || [];
     if (meBoard.join() !== this._lastMeBoardKey) {
       this._lastMeBoardKey = meBoard.join();
       this.myBoard.render(meBoard);
+
+      // Attach hover events to my board cards
+      this.myBoard.group.getChildren().forEach((card) => {
+        if (!card || !card.isCard) return;
+        const baseId = (card.uid || "").split("#")[0];
+        card.setInteractive({ useHandCursor: true });
+        card.on("pointerover", () => {
+          const cardData = CARDS_BY_ID[baseId];
+          if (cardData) this._updateCardDetails(cardData);
+        });
+        card.on("pointerout", () =>
+          this.cardDetailText.setText("Hover a card to see details")
+        );
+      });
     }
 
-    // opponent board / hand
+    /* ---------- Opponent Board ---------- */
     if (this.oppState) {
       const oppBoard = this.oppState.getState("board") || [];
       if (oppBoard.join() !== this._lastOppBoardKey) {
         this._lastOppBoardKey = oppBoard.join();
         this.oppBoard.render(oppBoard);
+
+        // Attach hover events to opponent board cards
+        this.oppBoard.group.getChildren().forEach((card) => {
+          if (!card || !card.isCard) return;
+          const baseId = (card.uid || "").split("#")[0];
+          card.setInteractive({ useHandCursor: true });
+          card.on("pointerover", () => {
+            const cardData = CARDS_BY_ID[baseId];
+            if (cardData) this._updateCardDetails(cardData);
+          });
+          card.on("pointerout", () =>
+            this.cardDetailText.setText("Hover a card to see details")
+          );
+        });
       }
 
+      /* ---------- Opponent Hand ---------- */
       const oppHand = this.oppState.getState("hand") || [];
       if (oppHand.length !== this._oppHandSize) {
         this._oppHandSize = oppHand.length;
-        // Draw backs only – hide type
         this.oppHand.clear(true, true);
-        oppHand.forEach((_, i) =>
-          this.oppHand.add(
-            new PlaceholderCard(
-              this,
-              "🌒",
-              this.screenMidX + i * 85,
-              OPP_HAND_Y
-            )
-          )
-        );
+        oppHand.forEach((_, i) => {
+          const back = new PlaceholderCard(
+            this,
+            "🌒",
+            this.screenMidX + i * 85,
+            OPP_HAND_Y
+          );
+          this.oppHand.add(back);
+          // No hover for hidden cards
+        });
       }
     }
   }
@@ -689,7 +904,7 @@ export class Multiplayer extends Phaser.Scene {
       // place / update labels *after* the bars, so they stay on top
       this.myHpTxt.setText(`HP ${hp}`).setPosition(hpPos.left - 8, hpPos.cy);
       this.myManaTxt
-        .setText(`MANA ${mp}`)
+        .setText(`MANA ${mp} / ${MAX_MANA}`)
         .setPosition(mpPos.left - 8, mpPos.cy);
     }
 
@@ -719,7 +934,7 @@ export class Multiplayer extends Phaser.Scene {
 
         this.oppHpTxt.setText(`HP ${oh}`).setPosition(hpPos.left - 8, hpPos.cy);
         this.oppManaTxt
-          .setText(`MANA ${om}`)
+          .setText(`MANA ${om} / ${MAX_MANA}`)
           .setPosition(mpPos.left - 8, mpPos.cy);
       }
     }
@@ -745,6 +960,14 @@ export class Multiplayer extends Phaser.Scene {
     }
   }
 
+  _syncToasts() {
+    const toastMsg = myPlayer()?.getState("toast");
+    if (toastMsg) {
+      this.ui.toast(toastMsg);
+      myPlayer().setState("toast", null, true); // clear after showing
+    }
+  }
+
   _syncRejects() {
     const rej = myPlayer()?.getState("reject");
     if (!rej) return;
@@ -762,40 +985,209 @@ export class Multiplayer extends Phaser.Scene {
   }
 
   _showGameOverOverlay() {
-    // do this only once
     if (this.gameOverShown) return;
     this.gameOverShown = true;
 
     const winnerId = getState("gameOver").winnerId;
     const msg = winnerId === myPlayer()?.id ? "YOU WIN!" : "YOU LOSE";
 
-    // choose one large number and reuse it for every overlay child
-    const Z = 10_000; // safely above everything in this scene
+    const Z = 10_000;
+    this.gameOverContainer = this.add.container(0, 0).setDepth(Z);
 
-    // --- black translucent backdrop ---
-    this.add
+    // Backdrop
+    const bg = this.add
       .rectangle(
         this.scale.width / 2,
         this.scale.height / 2,
         600,
-        240,
+        300,
         0x000000,
         0.8
       )
-      .setOrigin(0.5)
-      .setDepth(Z);
+      .setOrigin(0.5);
+    this.gameOverContainer.add(bg);
 
-    // --- text ---
-    this.add
-      .text(this.scale.width / 2, this.scale.height / 2, msg, {
+    // Message
+    const text = this.add
+      .text(this.scale.width / 2, this.scale.height / 2 - 40, msg, {
         fontSize: 72,
         color: "#fff",
         fontStyle: "bold",
       })
-      .setOrigin(0.5)
-      .setDepth(Z + 1); // a tiny bit above the backdrop
+      .setOrigin(0.5);
+    this.gameOverContainer.add(text);
 
-    // optional: block further clicks
-    this.input.enabled = false;
+    // Restart Button
+    const restartBtn = this.add
+      .text(
+        this.scale.width / 2,
+        this.scale.height / 2 + 60,
+        "🔄 Restart Game",
+        {
+          fontSize: 32,
+          color: "#00ff00",
+          backgroundColor: "#222",
+          padding: { x: 20, y: 10 },
+        }
+      )
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+
+    restartBtn.on("pointerup", () => {
+      if (isHost()) this._resetGame();
+      else this.ui.toast("Only host can restart the game.");
+    });
+
+    this.gameOverContainer.add(restartBtn);
+
+    this.input.enabled = true; // allow clicking restart
+  }
+
+  _resetGame() {
+    // 🔥 Broadcast reset flag so ALL clients clear their overlays
+    setState("resetGame", Date.now(), true);
+
+    // Clear game-specific states
+    setState("gameOver", null, true);
+    setState("logs", [], true);
+    setState("turnPlayerId", null, true);
+    setState("firstPlayerId", null, true);
+
+    // Reset each player's state
+    getParticipants().forEach((p) => {
+      p.setState("hand", [], true);
+      p.setState("board", [], true);
+      p.setState("boardState", {}, true);
+      p.setState("hp", HEALTH_POINTS, true);
+      p.setState("mana", 1, true);
+      p.setState("maxMana", 1, true);
+      p.setState("turnCount", 0, true);
+      p.setState("hasAttacked", {}, true);
+      p.setState("handReady", false, true);
+      p.setState("deckEmpty", false, true);
+    });
+
+    // Rebuild decks and deal new hands
+    this.deckMap.clear();
+    if (isHost()) {
+      getParticipants().forEach((p) => {
+        const deck = new Deck(buildDeck(CARDS, DECK_COPIES)).shuffle();
+        this.deckMap.set(p.id, deck);
+        p.setState("deckSize", deck.size(), true);
+      });
+      this._dealOpeningHands();
+    }
+
+    // Remove old game over UI
+    if (this.gameOverContainer) {
+      this.gameOverContainer.destroy(true);
+      this.gameOverContainer = null;
+    }
+
+    this.gameOverShown = false;
+  }
+
+  _updateDeckCounters() {
+    // ✅ My deck
+    // const myCardsLeft =
+    //   myPlayer()?.getState("deckSizeSelf") ??
+    //   (this.deckMap.get(myPlayer()?.id)?.size() || 0);
+    const myCardsLeft =
+      this.deckMap.get(myPlayer()?.id)?.size() ||
+      myPlayer()?.getState("deckSizeSelf") ||
+      0;
+
+    this.myDeckCounter.setText(`${myCardsLeft}`);
+
+    // ✅ Opponent deck
+    if (this.oppState) {
+      const oppCardsLeft =
+        this.oppState.getState("deckSizeSelf") ??
+        (this.deckMap.get(this.oppState.id)?.size() || 0);
+
+      if (!this.oppDeckCounter) {
+        this.oppDeckCounter = this.add
+          .text(
+            this.oppDeckBg.x + this.oppDeckBg.width / 2,
+            this.oppDeckBg.y + this.oppDeckBg.height / 2,
+            `${oppCardsLeft}`,
+            {
+              fontSize: 26,
+              color: "#fff",
+              fontFamily: "sans-serif",
+              fontStyle: "bold",
+            }
+          )
+          .setOrigin(0.5)
+          .setDepth(5000);
+      } else {
+        this.oppDeckCounter.setText(`${oppCardsLeft}`);
+      }
+    }
+  }
+
+  _updateCardDetails(cardData) {
+    this.cardDetailText.setText(
+      `${cardData.name}\nType: ${cardData.type}\nCost: ${cardData.cost}\n` +
+        (cardData.attack !== undefined ? `Attack: ${cardData.attack}\n` : "") +
+        (cardData.health !== undefined ? `Health: ${cardData.health}\n` : "") +
+        (cardData.damage !== undefined ? `Damage: ${cardData.damage}\n` : "") +
+        (cardData.heal !== undefined ? `Heal: ${cardData.heal}\n` : "") +
+        (cardData.description ? `\n${cardData.description}` : "")
+    );
+  }
+
+  _playCardAnimation() {
+    // ✅ Watch for animation events
+    const anim = getState("animEvent");
+    if (anim && anim !== this._lastAnimEvent) {
+      this._lastAnimEvent = anim;
+
+      if (anim.type === "cardPlayed") this._animateCardPlayed(anim);
+      if (anim.type === "cardAttack") this._animateCardAttack(anim);
+
+      // ✅ Clear it after triggering (only host or everyone can do this)
+      setState("animEvent", null, true);
+    }
+  }
+
+  _animateCardPlayed({ playerId, uid }) {
+    console.log("_animateCardPlayed", playerId, uid);
+    const isMe = playerId === myPlayer().id;
+    const board = isMe ? this.myBoard : this.oppBoard;
+    const card = board?.group?.getChildren()?.find((c) => c.uid === uid);
+    if (!card) return;
+
+    this.tweens.add({
+      targets: card,
+      scale: { from: 0.2, to: 1 },
+      alpha: { from: 0, to: 1 },
+      duration: 300,
+      ease: "Back.Out",
+    });
+  }
+
+  _animateCardAttack({ src, dst }) {
+    console.log("_animateCardAttack", src, dst);
+    const findCard = (uid) => {
+      return (
+        this.myBoard.group.getChildren().find((c) => c.uid === uid) ||
+        this.oppBoard?.group.getChildren().find((c) => c.uid === uid)
+      );
+    };
+
+    const attacker = findCard(src);
+    const defender = dst !== "player" ? findCard(dst) : null;
+    if (!attacker) return;
+
+    const attackTween = {
+      targets: attacker,
+      x: defender ? defender.x : attacker.x,
+      y: defender ? defender.y : attacker.y - 40,
+      yoyo: true,
+      duration: 250,
+      ease: "Quad.Out",
+    };
+    this.tweens.add(attackTween);
   }
 }

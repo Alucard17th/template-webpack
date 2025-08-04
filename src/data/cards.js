@@ -42,5 +42,23 @@ export const CARDS = [
     health: 6,
     cost: 7,
   },
+  {
+    id: "006",
+    frame: "006_battle_roar",
+    type: "spell",
+    name: "Power Boost",
+    cost: 2,
+    boostAttack: 2, // amount of attack to add
+    description: "Increase the attack of a friendly creature by 3."
+  },
+  {
+  id: "007",
+  frame: "007_mana_surge",
+  name: "Mana Surge",
+  type: "spell",
+  cost: 2,
+  boostMana: 2, // ✅ custom property
+  description: "Increase your max mana by 2 this turn."
+}
 ];
 export const CARDS_BY_ID = Object.fromEntries(CARDS.map((c) => [c.id, c]));

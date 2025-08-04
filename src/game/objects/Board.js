@@ -100,16 +100,22 @@ export class Board extends Phaser.GameObjects.Group {
       }
 
       if (data.type === "creature") {
-        const hpToShow = hpMap[uid] ?? data.health;
+        const hpToShow = hpMap[uid]?.hp ?? data.health;
         if (card.hpText) {
           card.hpText.setText(`❤️${hpToShow}`);
         } else if (card.atkDefText) {
           card.atkDefText.setText(`⚔️${data.attack}|❤️${hpToShow}`);
         }
+
+        console.log("[Board] rendering creature hpMap", hpMap[uid]);
+        console.log("[Board] rendering creature data", data);
+        console.log("[Board] rendering creature hpToShow", hpToShow);
+        console.log("[Board] rendering creature card", card);
+
       } else {
         // spells — optional tag/value
         if (card.atkDefText) {
-          const val = data.damage ?? data.heal ?? "";
+          const val = data.damage ?? data.heal ?? data.boostAttack ?? data.boostMana ?? "";
           card.atkDefText.setText(val !== "" ? `✦${val}` : ``);
         }
       }
@@ -131,10 +137,8 @@ export class Board extends Phaser.GameObjects.Group {
     return this.selectedCard;
   }
 
-  /** Update text using uid keys */
-  updateHpTexts(hpMap) {
+  updateHpTexts(stateMap) {
     this.group.getChildren().forEach((card) => {
-      // accept container or child; prefer tag
       const c = card?.isCard
         ? card
         : card?.parentContainer?.isCard
@@ -146,13 +150,20 @@ export class Board extends Phaser.GameObjects.Group {
       const data = CARDS_BY_ID[baseId] || {};
       if (data.type !== "creature") return;
 
-      const uid = c.uid ?? baseId; // fallback
-      const hpToShow = hpMap[uid] ?? data.health;
+      const uid = c.uid ?? baseId;
+      const state = stateMap[uid];
 
-      if (c.hpText) {
+      // ✅ Fallback to base stats if not in boardState
+      const atkToShow = state?.atk ?? data.attack;
+      const hpToShow = state?.hp ?? data.health;
+
+      if (c.hpText && c.atkText) {
+        // Your PlaceholderCard has atkText & hpText
+        c.atkText.setText(`⚔️${atkToShow}`);
         c.hpText.setText(`❤️${hpToShow}`);
       } else if (c.atkDefText) {
-        c.atkDefText.setText(`⚔️${data.attack}|❤️${hpToShow}`);
+        // Combined format
+        c.atkDefText.setText(`⚔️${atkToShow}|❤️${hpToShow}`);
       }
     });
   }

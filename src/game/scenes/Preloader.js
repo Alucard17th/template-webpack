@@ -35,7 +35,7 @@ export class Preloader extends Scene {
 
     CARDS.forEach((c) => {
       const key = c.frame;
-      const url = `cards/${key}.png`;
+      const url = `cards/pngs/${key}.png`;
       if (!this.textures.exists(key)) this.load.image(key, url);
     });
   }

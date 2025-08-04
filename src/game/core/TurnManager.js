@@ -1,7 +1,8 @@
 import { MAX_MANA, MAX_HAND_SIZE } from "./constants.js";
+import { getParticipants } from "playroomkit";
 
 /**
- * Pure turn‑cycle helper.
+ * Pure turn-cycle helper.
  * All "player" arguments are assumed to expose:
  *   - id
  *   - getState(key)
@@ -9,50 +10,51 @@ import { MAX_MANA, MAX_HAND_SIZE } from "./constants.js";
  */
 export class TurnManager {
   /**
-   * @param {Map<string, Deck>} deckMap  playerId → Deck instance
+   * @param {Phaser.Scene}    scene    – multiplayer scene (to poke UI)
+   * @param {Map<string,Deck>} deckMap – playerId → Deck instance
    */
-  constructor(deckMap) {
+  constructor(scene, deckMap) {
+    this.scene = scene;
     this.deckMap = deckMap;
-    this.localTurn = new Map();      // playerId → integer
-
+    this.localTurn = new Map(); // playerId → integer (client-side convenience)
   }
 
   /** Host only – call when a new turn starts for `player`. */
-  /** Host only – call when a new turn starts for `player`. */
+
   startTurn(player) {
-    // 1. advance per-player turn counter
     const turnCount = (player.getState("turnCount") || 0) + 1;
     player.setState("turnCount", turnCount, true);
 
-    // 2. refill / grow mana (cap at MAX_MANA)
     const newMax = Math.min(turnCount, MAX_MANA);
     player.setState("maxMana", newMax, true);
     player.setState("mana", newMax, true);
 
-    // 3. reset attacks
     const reset = {};
     (player.getState("board") || []).forEach((uid) => (reset[uid] = false));
     player.setState("hasAttacked", reset, true);
 
-    // 4. draw a card (if hand not full)
     const deck = this.deckMap.get(player.id);
     if (!deck) return;
-    const drawn = deck.draw();
-    if (drawn) {
+
+    if (turnCount > 1) {
       const hand = player.getState("hand") || [];
-      if (hand.length < MAX_HAND_SIZE) {
+      if (hand.length < MAX_HAND_SIZE && deck.stack.length > 0) {
+        const drawn = deck.draw();
         hand.push(drawn.uid);
         player.setState("hand", hand, true);
+      } else if (deck.stack.length === 0) {
+        const hp = player.getState("hp") || 0;
+        player.setState("hp", Math.max(0, hp - 1), true);
+        player.setState("deckEmpty", true, true);
       }
     }
 
-    console.log(
-      "[TurnManager] startTurn()",
-      player.id,
-      "Turn",
-      turnCount,
-      "→ mana",
-      newMax
-    );
+    // ✅ Sync deckSizeSelf for *all* players every turn
+    getParticipants().forEach((ps) => {
+      const d = this.deckMap.get(ps.id);
+      if (d) ps.setState("deckSizeSelf", d.size(), true);
+    });
+
+    this.scene?._updateDeckCounters?.();
   }
 }
