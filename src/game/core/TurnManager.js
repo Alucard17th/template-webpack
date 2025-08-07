@@ -20,7 +20,6 @@ export class TurnManager {
   }
 
   /** Host only – call when a new turn starts for `player`. */
-
   startTurn(player) {
     const turnCount = (player.getState("turnCount") || 0) + 1;
     player.setState("turnCount", turnCount, true);

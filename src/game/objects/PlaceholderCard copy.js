@@ -3,14 +3,16 @@ import { CARDS } from "../../data/cards";
 import { CARD_WIDTH, CARD_HEIGHT } from "../core/constants.js";
 
 export class PlaceholderCard extends Phaser.GameObjects.Container {
-  // tweak visuals here if you like
   static W = CARD_WIDTH;
   static H = CARD_HEIGHT;
-  static CORNER = 10;
+  static CORNER = 4;
 
   static COLORS = {
-    frame: 0xffffff,
+    base: 0x723c05,
+    frame: 0x2e1802,
     shadow: 0x000000,
+    gradientTop: 0xeeeeee,
+    gradientBottom: 0x999999,
     nameBg: 0x000000,
     nameText: 0xffffff,
     costFill: 0x0080ff,
@@ -23,160 +25,77 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
     attackableOutline: 0x00ff66,
   };
 
-  constructor(scene, baseId, x = W + 10, y, uid = null) {
+  constructor(scene, baseId, x = PlaceholderCard.W + 10, y, uid = null) {
     super(scene, x, y);
     this.scene = scene;
-    this.cardId = baseId; // base stats id
-    this.uid = uid ?? baseId; // unique instance id
-    this.isCard = true; // used by hit tests
+    this.cardId = baseId;
+    this.uid = uid ?? baseId;
+    this.isCard = true;
 
     this.cardWidth = PlaceholderCard.W;
     this.cardHeight = PlaceholderCard.H;
 
-    // ── soft drop shadow
+    // ✅ Draw card layers
     this._addDropShadow();
-
-    // ── artwork with rounded mask (falls back to gray if missing)
+    this._addBaseShape();
     this._addArtwork();
 
-    // ── outer frame
-    this._addFrame();
-
-    // data for overlays
     const data = CARDS.find((c) => c.id === baseId) || {};
-
-    // ── overlays
     this._buildNameAndCost(data);
     this._buildTypeOverlay(data);
 
-    // input on whole card (correct local coords)
     this.setSize(this.cardWidth, this.cardHeight);
+    // ✅ Ensure the whole card container is interactive
     this.setInteractive({
       hitArea: new Phaser.Geom.Rectangle(0, 0, this.cardWidth, this.cardHeight),
       hitAreaCallback: Phaser.Geom.Rectangle.Contains,
-      useHandCursor: true, // ← ✋ shows when hovered
+      // useHandCursor: true, // ← ✋ shows when hovered
     });
-    const BASE_SCALE = 1; // normal size
-    const HOVER_SCALE = 1.25; // 25 % bigger
-    const ZOOM_MS = 150; // tween duration
-    // keep the depth you were created with so you can restore it later
-    this.baseDepth = this.depth;
-    // grow + bring to front
-    this.on("pointerover", () => {
-      this.setDepth(9999); // draw over everything
-      this.scene.tweens.add({
-        targets: this,
-        scale: HOVER_SCALE, // scaleX + scaleY together
-        duration: ZOOM_MS,
-        ease: "quad.out",
-        overwrite: true, // cancel previous tween
-      });
-    });
-    // shrink + put depth back
-    this.on("pointerout", () => {
-      this.scene.tweens.add({
-        targets: this,
-        scale: BASE_SCALE,
-        duration: ZOOM_MS,
-        ease: "quad.in",
-        overwrite: true,
-      });
-      this.setDepth(this.baseDepth);
-    });
+    this._setupHover();
 
     scene.add.existing(this);
 
-    // highlight graphics refs
-    this.hlGfx = null; // yellow selected outline
-    this.attackableGfx = null; // green "can attack" outline
+    this.hlGfx = null;
+    this.attackableGfx = null;
   }
 
-  // ─────────────────────────────────────────────
-  // Build parts
-  // ─────────────────────────────────────────────
+  preDestroy() {
+    // make sure the orphaned geometry mask goes away
+    if (this._artMaskG) {
+      this._artMaskG.destroy();
+      this._artMaskG = null;
+    }
+    // let Phaser’s Container cleanup continue
+    super.preDestroy && super.preDestroy();
+  }
+
+  // ──────────────────────────────
+  // Visual Layers
+  // ──────────────────────────────
   _addDropShadow() {
     const g = this.scene.add.graphics();
-    g.fillStyle(PlaceholderCard.COLORS.shadow, 0.28);
+    g.fillStyle(PlaceholderCard.COLORS.shadow, 0.3);
     g.fillRoundedRect(
-      -this.cardWidth / 2 + 3,
-      -this.cardHeight / 2 + 5,
+      -this.cardWidth / 2 + 4,
+      -this.cardHeight / 2 + 6,
       this.cardWidth + 2,
-      this.cardHeight + 6,
-      PlaceholderCard.CORNER + 2
+      this.cardHeight + 8,
+      PlaceholderCard.CORNER + 4
     );
     this.add(g);
   }
 
-  _addArtwork() {
-    const data = CARDS.find((c) => c.id === this.cardId) || {};
-    const texKey = (data.frame || "").trim();
-
-    // Debug once per card
-    if (!texKey) {
-      console.warn("[Card] no frame for", this.cardId);
-    } else if (!this.scene.textures.exists(texKey)) {
-      console.warn(
-        "[Card] texture missing:",
-        texKey,
-        "available:",
-        Object.keys(this.scene.textures.list)
-      );
-    }
-
-    // Off-display graphics used only for the mask
-    const maskG = this.scene.make.graphics({ x: 0, y: 0, add: false });
-    maskG.fillStyle(0xffffff, 1);
-    maskG.fillRoundedRect(
-      this.x - this.cardWidth / 2,
-      this.y - this.cardHeight / 2,
+  _addBaseShape() {
+    const g = this.scene.add.graphics();
+    g.fillStyle(PlaceholderCard.COLORS.frame, 0.9);
+    g.fillRoundedRect(
+      -this.cardWidth / 2,
+      -this.cardHeight / 2,
       this.cardWidth,
       this.cardHeight,
       PlaceholderCard.CORNER
     );
-    const geomMask = maskG.createGeometryMask();
-
-    let art;
-    if (texKey && this.scene.textures.exists(texKey)) {
-      art = this.scene.add.image(0, 0, texKey).setOrigin(0.5);
-
-      // scale to fit
-      const src = this.scene.textures.get(texKey).getSourceImage();
-      const scale = Math.min(
-        this.cardWidth / src.width,
-        this.cardHeight / src.height
-      );
-      art.setScale(scale);
-    } else {
-      // fallback neutral bg
-      art = this.scene.add
-        .rectangle(0, 0, this.cardWidth, this.cardHeight, 0x444444)
-        .setOrigin(0.5);
-    }
-
-    art.setMask(geomMask);
-    this.add(art);
-
-    // subtle glass highlight on top
-    const glass = this.scene.add.graphics();
-    const h = this.cardHeight * 0.45;
-    glass.fillStyle(0xffffff, 0.07);
-    glass.fillRoundedRect(
-      -this.cardWidth / 2,
-      -this.cardHeight / 2,
-      this.cardWidth,
-      h,
-      { tl: PlaceholderCard.CORNER, tr: PlaceholderCard.CORNER, bl: 0, br: 0 }
-    );
-    this.add(glass);
-
-    // keep a reference so you can destroy later if needed
-    this._art = art;
-    this._artMaskG = maskG;
-  }
-
-  _addFrame() {
-    const g = this.scene.add.graphics();
-    g.lineStyle(2, PlaceholderCard.COLORS.frame, 1);
+    g.lineStyle(10, PlaceholderCard.COLORS.base, 1);
     g.strokeRoundedRect(
       -this.cardWidth / 2,
       -this.cardHeight / 2,
@@ -187,13 +106,95 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
     this.add(g);
   }
 
-  // ─────────────────────────────────────────────
-  // Name + Cost
-  // ─────────────────────────────────────────────
+  _addArtwork() {
+    const data = CARDS.find((c) => c.id === this.cardId) || {};
+    const texKey = (data.frame || "").trim();
+
+    // ✅ Create proper local-space mask
+    // const maskG = this.scene.make.graphics({ add: false });
+    // maskG.fillStyle(0xFF0000, 0);
+    // maskG.fillRoundedRect(
+    //   -this.cardWidth / 2,
+    //   -this.cardHeight / 2,
+    //   this.cardWidth,
+    //   this.cardHeight,
+    //   PlaceholderCard.CORNER
+    // );
+    // maskG.x = this.x; // Sync mask position with card
+    // maskG.y = this.y;
+    // const geomMask = maskG.createGeometryMask();
+
+    // 🖼️ Artwork
+    let art;
+    if (texKey && this.scene.textures.exists(texKey)) {
+      art = this.scene.add.image(0, 0, texKey).setOrigin(0.5);
+      const src = this.scene.textures.get(texKey).getSourceImage();
+      const scale = Math.min(
+        this.cardWidth / src.width,
+        this.cardHeight / src.height
+      );
+      art.setScale(scale);
+    } else {
+      art = this.scene.add
+        .rectangle(0, 0, this.cardWidth, this.cardHeight, 0xffffff)
+        .setOrigin(0.5);
+    }
+
+    // art.setMask(geomMask);
+
+    // ✅ Add art AFTER background so it's visible
+    this.add(art);
+
+    this._addDepthFaces(6, 0x3a2409);
+
+    this._art = art;
+    // this._artMaskG = maskG;
+  }
+
+  _addDepthFaces(depthPx = 6, mainColor = 0x352108) {
+    // Right face ─ trapezoid
+    const r = this.scene.add.graphics();
+    r.fillStyle(mainColor, 0.9);
+    r.beginPath();
+    r.moveTo(this.cardWidth / 2, -this.cardHeight / 2);
+    r.lineTo(
+      this.cardWidth / 2 + depthPx,
+      -this.cardHeight / 2 - depthPx * 0.4
+    );
+    r.lineTo(this.cardWidth / 2 + depthPx, this.cardHeight / 2 - depthPx * 0.4);
+    r.lineTo(this.cardWidth / 2, this.cardHeight / 2);
+    r.closePath();
+    r.fillPath();
+
+    // Bottom face ─ trapezoid
+    const b = this.scene.add.graphics();
+    b.fillStyle(mainColor, 0.75);
+    b.beginPath();
+    b.moveTo(-this.cardWidth / 2, this.cardHeight / 2);
+    b.lineTo(this.cardWidth / 2, this.cardHeight / 2);
+    b.lineTo(this.cardWidth / 2 + depthPx, this.cardHeight / 2 - depthPx * 0.4);
+    b.lineTo(
+      -this.cardWidth / 2 + depthPx,
+      this.cardHeight / 2 - depthPx * 0.4
+    );
+    b.closePath();
+    b.fillPath();
+
+    // Slide both faces behind everything else in the container
+    this.addAt([r, b], 0);
+
+    // Remember them so scale / tint tweens can include them later
+    this._depthRight = r;
+    this._depthBottom = b;
+  }
+
+  // ──────────────────────────────
+  // Name + Cost Overlay
+  // ──────────────────────────────
   _buildNameAndCost(data) {
-    const PAD_X = 6;
-    const NAME_TOP = 46; // px from top edge
-    const r = 11;
+    const PAD_X = 1;
+    const NAME_TOP = 0;
+    const r = 22;
 
     const usableW = this.cardWidth - PAD_X * 2;
     const yTop = -this.cardHeight / 2 + NAME_TOP;
@@ -201,7 +202,7 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
     const nameText = this.scene.add
       .text(0, yTop, data.name || "?", {
         fontSize: "18px",
-        color: "#ffffff",
+        color: "#fff",
         fontStyle: "bold",
         align: "center",
         wordWrap: { width: usableW, useAdvancedWrap: true },
@@ -209,139 +210,173 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       .setOrigin(0.5, 0);
 
     const bounds = nameText.getBounds();
-    const bgH = bounds.height + 2;
+    const bgH = bounds.height + 4;
 
     const nameBg = this.scene.add
-      .rectangle(0, yTop + bgH / 2, this.cardWidth - 10, bgH, 0x000000, 0.48)
+      .rectangle(0, yTop + bgH / 2, this.cardWidth, bgH, 0x000000, 0.3)
       .setOrigin(0.5);
 
-    // cost badge (center), avoid overlapping name bar
-    const topEdge = -this.cardHeight / 2;
-    let badgeY = topEdge + r + 2;
-    if (badgeY + r > yTop) badgeY = yTop - r - 2;
-
+    const badgeY = -this.cardHeight / 2 + r - 30;
     const badgeG = this.scene.add.graphics();
-    badgeG.fillStyle(PlaceholderCard.COLORS.costFill, 1).fillCircle(0, 0, r);
     badgeG
-      .lineStyle(2, PlaceholderCard.COLORS.costStroke, 1)
-      .strokeCircle(0, 0, r);
+      .fillStyle(PlaceholderCard.COLORS.costFill, 1)
+      .fillEllipse(0, 0, r, r);
+    badgeG.lineStyle(2, PlaceholderCard.COLORS.costStroke, 1);
+    // .strokeCircle(0, 0, r);
 
     const costText = this.scene.add
       .text(0, 0, String(data.cost ?? "?"), {
-        fontSize: "14px",
-        color: "#ffffff",
+        fontSize: "20px",
+        color: "#fff",
+        fontStyle: "bold",
       })
       .setOrigin(0.5);
 
-    // fit inside circle if necessary
-    const maxW = r * 1.6;
-    const cBounds = costText.getBounds();
-    if (cBounds.width > maxW && cBounds.width > 0) {
-      costText.setScale(maxW / cBounds.width);
-    }
-
-    const costOverlay = this.scene.add.container(0, badgeY, [badgeG, costText]);
-
-    // z-order
-    nameBg.setDepth(1);
-    nameText.setDepth(2);
-    costOverlay.setDepth(3);
+    const costOverlay = this.scene.add.container(
+      -this.cardWidth / 2 - 4,
+      badgeY,
+      [badgeG, costText]
+    );
 
     this.add([nameBg, nameText, costOverlay]);
 
-    // keep refs
     this.nameText = nameText;
     this.nameBg = nameBg;
     this.costText = costText;
-    this.costOverlay = costOverlay;
   }
 
-  // ─────────────────────────────────────────────
-  // Type overlays
-  // ─────────────────────────────────────────────
+  // ──────────────────────────────
+  // Type Overlay (Attack/HP or Spell)
+  // ──────────────────────────────
   _buildTypeOverlay(data) {
-    if (data.type === "creature") {
-      const y = this.cardHeight / 2 - 16;
+    const y = this.cardHeight / 2 - 12;
 
+    if (data.type === "creature") {
       const bar = this.scene.add
-        .rectangle(0, y, this.cardWidth - 8, 18, 0x000000, 0.45)
+        .rectangle(0, y, this.cardWidth - 10, 20, 0x000000, 0.3)
         .setOrigin(0.5);
 
       const atkText = this.scene.add
-        .text(-this.cardWidth / 2 + 5, y, `⚔️${data.attack ?? "?"}`, {
-          fontSize: "24px",
-          color: "#ffffff",
+        .text(-this.cardWidth / 2 + 8, y, `⚔️${data.attack ?? "?"}`, {
+          fontSize: "20px",
+          color: "#fff",
+          fontStyle: "bold",
         })
         .setOrigin(0, 0.5);
 
       const hpText = this.scene.add
-        .text(this.cardWidth / 2 - 5, y, `❤️${data.health ?? "?"}`, {
-          fontSize: "24px",
-          color: "#ffffff",
+        .text(this.cardWidth / 2 - 8, y, `❤️${data.health ?? "?"}`, {
+          fontSize: "20px",
+          color: "#fff",
+          fontStyle: "bold",
         })
         .setOrigin(1, 0.5);
 
       this.add([bar, atkText, hpText]);
-
       this.atkText = atkText;
       this.hpText = hpText;
     } else {
-      const y = this.cardHeight / 2 - 16;
-      let label = "XXXXX"; 
-      if (data.damage != null) label = `DMG ${data.damage}`;
-      if (data.heal != null) label = `HEAL ${data.heal}`;
+      let label =
+        data.damage != null
+          ? `DMG ${data.damage}`
+          : data.heal != null
+          ? `HEAL ${data.heal}`
+          : data.boostAttack != null
+          ? `ATK+ ${data.boostAttack}`
+          : data.boostMana != null
+          ? `MANA+ ${data.boostMana}`
+          : "?";
 
       const tag = this.scene.add
         .text(0, y, label, {
-          fontSize: "24px",
-          color: "#ffe066",
-          backgroundColor: "#00000099",
-          padding: { x: 4, y: 2 },
+          fontSize: "22px",
+          color: "#fff",
+          backgroundColor: "#0000002d",
+          padding: { x: 6, y: 2 },
+          fontStyle: "bold",
         })
+        .setFixedSize(this.cardWidth, 0)
+        .setAlign("center")
         .setOrigin(0.5);
-
       this.add(tag);
       this.spellTag = tag;
     }
   }
 
-  // ─────────────────────────────────────────────
-  // Public setters (used by your Board/UI code)
-  // ─────────────────────────────────────────────
+  // ──────────────────────────────
+  // Hover Animation
+  // ──────────────────────────────
+  _setupHover() {
+    const BASE_SCALE = 1;
+    const HOVER_SCALE = 1.3;
+    const ZOOM_MS = 150;
+
+    this.on("pointerover", () => {
+      this.setDepth(9999);
+      this.scene.tweens.add({
+        targets: this,
+        scale: HOVER_SCALE,
+        duration: ZOOM_MS,
+        ease: "quad.out",
+        overwrite: true,
+      });
+      if (this._depthRight && this._depthBottom) {
+        this.scene.tweens.add({
+          targets: [this._depthRight, this._depthBottom],
+          alpha: 1,
+          duration: 150,
+          ease: "quad.out",
+          overwrite: true,
+        });
+      }
+    });
+
+    this.on("pointerout", () => {
+      this.setDepth(0);
+      this.scene.tweens.add({
+        targets: this,
+        scale: BASE_SCALE,
+        duration: ZOOM_MS,
+        ease: "quad.in",
+        overwrite: true,
+      });
+      if (this._depthRight && this._depthBottom) {
+        this.scene.tweens.add({
+          targets: [this._depthRight, this._depthBottom],
+          alpha: 0.75,
+          duration: 150,
+          ease: "quad.in",
+          overwrite: true,
+        });
+      }
+    });
+  }
+
+  // ──────────────────────────────
+  // Public setters
+  // ──────────────────────────────
   setHp(v) {
     if (this.hpText) this.hpText.setText(`❤️${v}`);
   }
+
   setAtk(v) {
     if (this.atkText) this.atkText.setText(`⚔️${v}`);
   }
+
   setStats(atk, hp) {
-    if (atk != null) this.setAtk(atk);
-    if (hp != null) this.setHp(hp);
+    this.setAtk(atk);
+    this.setHp(hp);
   }
+
   setCost(cost) {
-    if (!this.costText) return;
-    this.costText.setText(String(cost));
-    const r = 11;
-    const maxW = r * 1.6;
-    const b = this.costText.getBounds();
-    if (b.width > maxW && b.width > 0) {
-      this.costText.setScale(maxW / b.width);
-    } else {
-      this.costText.setScale(1);
-    }
-  }
-  setSpellValue(val, kind) {
-    if (!this.spellTag) return;
-    this.spellTag.setText(kind === "heal" ? `HEAL ${val}` : `DMG ${val}`);
+    if (this.costText) this.costText.setText(String(cost));
   }
 
   highlight(on) {
     if (on) {
       if (this.hlGfx) return;
-      this.hlGfx = this._drawOutline(PlaceholderCard.COLORS.selectOutline, 4);
-      this.setScale(1.05);
+      this.hlGfx = this._drawOutline(PlaceholderCard.COLORS.selectOutline, 5);
     } else {
-      this.setScale(1);
       if (this.hlGfx) this.hlGfx.destroy();
       this.hlGfx = null;
     }
@@ -352,7 +387,7 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       if (this.attackableGfx || this.hlGfx) return;
       this.attackableGfx = this._drawOutline(
         PlaceholderCard.COLORS.attackableOutline,
-        3
+        4
       );
     } else {
       if (this.attackableGfx) this.attackableGfx.destroy();
@@ -360,9 +395,6 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // Helpers
-  // ─────────────────────────────────────────────
   _drawOutline(color, width) {
     const g = this.scene.add.graphics();
     g.lineStyle(width, color, 1);
@@ -373,7 +405,7 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       this.cardHeight + 6,
       PlaceholderCard.CORNER + 2
     );
-    this.addAt(g, 100); // above art/glass
+    this.addAt(g, 100);
     return g;
   }
 }

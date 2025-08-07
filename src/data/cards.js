@@ -49,16 +49,25 @@ export const CARDS = [
     name: "Power Boost",
     cost: 2,
     boostAttack: 2, // amount of attack to add
-    description: "Increase the attack of a friendly creature by 3."
+    description: "Increase the attack of a friendly creature by 3.",
   },
   {
-  id: "007",
-  frame: "007_mana_surge",
-  name: "Mana Surge",
-  type: "spell",
-  cost: 2,
-  boostMana: 2, // ✅ custom property
-  description: "Increase your max mana by 2 this turn."
-}
+    id: "007",
+    frame: "007_mana_surge",
+    name: "Mana Surge",
+    type: "spell",
+    cost: 2,
+    boostMana: 2, // ✅ custom property
+    description: "Increase your max mana by 2 this turn.",
+  },
+  {
+    id: "008",
+    frame: "008_scroll_of_insight",
+    type: "spell",
+    name: "Insight Scroll",
+    cost: 1,
+    draw: 1, // ← NEW FIELD your engine will look for
+    description: "Draw 1 card.",
+  },
 ];
 export const CARDS_BY_ID = Object.fromEntries(CARDS.map((c) => [c.id, c]));

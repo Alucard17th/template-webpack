@@ -5,7 +5,7 @@
  *    ─ forwards “request” objects to the RequestQueue ⬅️  (THE brain)
  *********************************************************************/
 
-import Phaser, { AUTO, Game } from "phaser";
+import Phaser from "phaser";
 import {
   onPlayerJoin,
   isHost,
@@ -15,16 +15,13 @@ import {
   getState,
   getParticipants,
 } from "playroomkit";
-
 import { CARDS, CARDS_BY_ID } from "../../data/cards.js";
 import { CARD_WIDTH, CARD_HEIGHT } from "../core/constants.js";
 import { buildDeck } from "../../helpers/deckUtils.js";
 import { Deck } from "../../logic/Deck.js";
-
 import { UI } from "../objects/UI.js";
 import { Board } from "../objects/Board.js";
 import { PlaceholderCard } from "../objects/PlaceholderCard.js";
-
 import {
   START_HAND_SIZE,
   DECK_COPIES,
@@ -35,7 +32,6 @@ import {
   MY_HAND_Y,
   OPP_HAND_Y,
 } from "../core/constants.js";
-
 import { TurnManager } from "../core/TurnManager.js";
 import { RequestQueue } from "../core/RequestQueue.js";
 
@@ -783,6 +779,7 @@ export class Multiplayer extends Phaser.Scene {
   _syncHand() {
     const hand = myPlayer()?.getState("hand") || [];
     const key = hand.join(",");
+    const canvas = this.game.canvas;
     if (key === this._lastHandKey) return;
     this._lastHandKey = key;
 
@@ -802,6 +799,7 @@ export class Multiplayer extends Phaser.Scene {
         const baseId = card.uid.split("#")[0];
         const cardData = CARDS_BY_ID[baseId];
         if (cardData) this._updateCardDetails(cardData);
+        canvas.classList.add("card-hover");
       });
       card.on("pointerup", () => {
         if (getState("turnPlayerId") !== myPlayer().id) {
@@ -813,6 +811,7 @@ export class Multiplayer extends Phaser.Scene {
       });
       card.on("pointerout", () => {
         this.cardDetailText.setText("Hover a card to see details");
+        canvas.classList.remove("card-hover");
       });
     });
 
@@ -829,19 +828,24 @@ export class Multiplayer extends Phaser.Scene {
     if (meBoard.join() !== this._lastMeBoardKey) {
       this._lastMeBoardKey = meBoard.join();
       this.myBoard.render(meBoard);
-
+      this.myBoard.updateHpTexts(myPlayer().getState("boardState") || {});
+      const canvas = this.game.canvas;
       // Attach hover events to my board cards
       this.myBoard.group.getChildren().forEach((card) => {
         if (!card || !card.isCard) return;
         const baseId = (card.uid || "").split("#")[0];
-        card.setInteractive({ useHandCursor: true });
+        card.setInteractive({ useHandCursor: false });
         card.on("pointerover", () => {
           const cardData = CARDS_BY_ID[baseId];
           if (cardData) this._updateCardDetails(cardData);
+          canvas.classList.add("card-hover");
+          console.log("pointerover", cardData, canvas.classList);
         });
-        card.on("pointerout", () =>
-          this.cardDetailText.setText("Hover a card to see details")
-        );
+        card.on("pointerout", () => {
+          this.cardDetailText.setText("Hover a card to see details");
+          canvas.classList.remove("card-hover");
+          console.log("pointerout");
+        });
       });
     }
 
@@ -851,12 +855,13 @@ export class Multiplayer extends Phaser.Scene {
       if (oppBoard.join() !== this._lastOppBoardKey) {
         this._lastOppBoardKey = oppBoard.join();
         this.oppBoard.render(oppBoard);
+        this.oppBoard.updateHpTexts(this.oppState.getState("boardState") || {});
 
         // Attach hover events to opponent board cards
         this.oppBoard.group.getChildren().forEach((card) => {
           if (!card || !card.isCard) return;
           const baseId = (card.uid || "").split("#")[0];
-          card.setInteractive({ useHandCursor: true });
+          card.setInteractive({ useHandCursor: false });
           card.on("pointerover", () => {
             const cardData = CARDS_BY_ID[baseId];
             if (cardData) this._updateCardDetails(cardData);
@@ -988,6 +993,14 @@ export class Multiplayer extends Phaser.Scene {
 
     if (rej.reason === "firstTurn") {
       this.ui.toast("❌ You cannot attack on the first turn!");
+    }
+
+    if (rej.reason === "protectedFace") {
+      this.ui.toast("❌ You cannot attack a protected face!");
+    }
+
+    if (rej.reason === "badTarget") {
+      this.ui.toast("❌ You cannot attack this card!");
     }
 
     // clear reject after showing

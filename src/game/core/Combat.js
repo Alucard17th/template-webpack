@@ -1,4 +1,4 @@
-import { HEALTH_POINTS, MAX_MANA } from "./constants.js";
+import { HEALTH_POINTS, MAX_MANA, MAX_HAND_SIZE } from "./constants.js";
 
 /**
  * Creature‑vs‑creature combat.  Updates both players’ boardState + board list.
@@ -62,8 +62,10 @@ export function resolveSpell(
   dstUid,
   srcPS,
   dstPS,
-  CARDS_BY_ID
+  CARDS_BY_ID,
+  deckMap
 ) {
+
   // Heal Spell → Target Player or Creature
   if (cardData.heal) {
     if (dstUid === "player") {
@@ -118,11 +120,31 @@ export function resolveSpell(
     return;
   }
 
-  // ✅ Mana Boost Spell → Always Target Player
+  // Mana Boost Spell → Always Target Player
   if (cardData.boostMana) {
     const currentMana = srcPS.getState("mana") ?? 0;
     const newMana = Math.min(MAX_MANA, currentMana + cardData.boostMana);
     srcPS.setState("mana", newMana, true);
     return;
+  }
+
+  // Draw Spell → Always Target Player
+  if (cardData.draw) {
+    const deck = deckMap.get(srcPS.id);
+    if (deck && deck.size() > 0) {
+      const hand = srcPS.getState("hand") || [];
+      if (hand.length < MAX_HAND_SIZE) {
+        const newCard = deck.draw();
+        hand.push(newCard.uid);
+        srcPS.setState("hand", hand, true);
+
+        // keep deck counters in sync
+        srcPS.setState("deckSizeSelf", deck.size(), true);
+      } else {
+        // optional overflow toast
+        srcPS.setState("toast", "Your hand is already full!", true);
+      }
+    }
+    return; // spell finished
   }
 }

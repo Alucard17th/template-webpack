@@ -6,6 +6,18 @@ Add mana/maxMana display in UI. XXX
 
 Handle deck-empty scenarios gracefully. XXX
 
-Add minimal animations for card play & attack (biggest visual upgrade).
+Add minimal animations for card play & attack (biggest visual upgrade). XXX
 
 Store name/avatar in localStorage so returning players don’t have to set them again.
+
+
+_________
+fix the mana surge card name
+
+__________
+CARD TYPES
+    Creature
+    Boost mana
+    Boost attack
+    Heal (player/creature)
+    
