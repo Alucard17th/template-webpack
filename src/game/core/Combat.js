@@ -1,5 +1,4 @@
-import { HEALTH_POINTS, MAX_MANA, MAX_HAND_SIZE } from "./constants.js";
-
+import { resolveWithRegistry } from "./SpellRegistry.js";
 /**
  * Creature‑vs‑creature combat.  Updates both players’ boardState + board list.
  */
@@ -59,92 +58,25 @@ export function applyCreatureDamage(
 export function resolveSpell(
   cardData,
   srcUid,
-  dstUid,
-  srcPS,
-  dstPS,
+  dstUid,        // "player" or target creature uid
+  srcPS,         // caster PlayerState
+  dstPS,         // opponent PlayerState (for face dmg / enemy targets)
   CARDS_BY_ID,
-  deckMap
+  deckMap        // needed for draw
 ) {
-
-  // Heal Spell → Target Player or Creature
-  if (cardData.heal) {
-    if (dstUid === "player") {
-      const hp = srcPS.getState("hp") ?? 0;
-      srcPS.setState("hp", Math.min(HEALTH_POINTS, hp + cardData.heal), true);
-    } else {
-      const bs = srcPS.getState("boardState") || {};
-      const dstCard = CARDS_BY_ID[dstUid.split("#")[0]];
-      const current = bs[dstUid] || { atk: dstCard.attack, hp: dstCard.health };
-      bs[dstUid] = { ...current, hp: current.hp + cardData.heal };
-      srcPS.setState("boardState", bs, true);
-    }
-    return;
-  }
-
-  // Damage Spell → Target Player or Creature
-  if (cardData.damage) {
-    if (dstUid === "player") {
-      const hp = dstPS.getState("hp") ?? 0;
-      dstPS.setState("hp", Math.max(0, hp - cardData.damage), true);
-    } else {
-      const bs = dstPS.getState("boardState") || {};
-      const dstCard = CARDS_BY_ID[dstUid.split("#")[0]];
-      const current = bs[dstUid] || { atk: dstCard.attack, hp: dstCard.health };
-      const newHp = Math.max(0, current.hp - cardData.damage);
-
-      if (newHp <= 0) {
-        // ✅ Remove dead card from board
-        const board = dstPS.getState("board") || [];
-        dstPS.setState(
-          "board",
-          board.filter((id) => id !== dstUid),
-          true
-        );
-        delete bs[dstUid];
-      } else {
-        bs[dstUid] = { ...current, hp: newHp };
-      }
-
-      dstPS.setState("boardState", bs, true);
-    }
-    return;
-  }
-
-  // Attack Boost Spell → Only Creature
-  if (cardData.boostAttack) {
-    const bs = srcPS.getState("boardState") || {};
-    const dstCard = CARDS_BY_ID[dstUid.split("#")[0]];
-    const current = bs[dstUid] || { atk: dstCard.attack, hp: dstCard.health };
-    bs[dstUid] = { ...current, atk: current.atk + cardData.boostAttack };
-    srcPS.setState("boardState", bs, true);
-    return;
-  }
-
-  // Mana Boost Spell → Always Target Player
-  if (cardData.boostMana) {
-    const currentMana = srcPS.getState("mana") ?? 0;
-    const newMana = Math.min(MAX_MANA, currentMana + cardData.boostMana);
-    srcPS.setState("mana", newMana, true);
-    return;
-  }
-
-  // Draw Spell → Always Target Player
-  if (cardData.draw) {
-    const deck = deckMap.get(srcPS.id);
-    if (deck && deck.size() > 0) {
-      const hand = srcPS.getState("hand") || [];
-      if (hand.length < MAX_HAND_SIZE) {
-        const newCard = deck.draw();
-        hand.push(newCard.uid);
-        srcPS.setState("hand", hand, true);
-
-        // keep deck counters in sync
-        srcPS.setState("deckSizeSelf", deck.size(), true);
-      } else {
-        // optional overflow toast
-        srcPS.setState("toast", "Your hand is already full!", true);
-      }
-    }
-    return; // spell finished
-  }
+  return resolveWithRegistry({
+    card: cardData,
+    srcUid,
+    dst: dstUid,
+    caster: srcPS,
+    opponent: dstPS,
+    CARDS_BY_ID,
+    deckMap,
+    log: (msg) => {
+      // you can pipe this into your scene log if you like:
+      // this.turnManager.scene?.addLog?.(`[SPELL] ${msg}`);
+      // For now:
+      console.log("COMBAT resolveSpell [SPELL]: ", msg);
+    },
+  });
 }
