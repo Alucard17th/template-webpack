@@ -7,6 +7,13 @@ export const CARDS = [
     attack: 2,
     health: 1,
     cost: 1,
+    keywords: ["taunt", /*"divineShield"*/], // static flags
+    effects: [
+      { typeGroup: "battlecry", type: "draw", count: 1 },
+      // { typeGroup: "deathrattle", type: "dealFace", amount: 2, enemy: true },
+      // { typeGroup: "startTurn", type: "healFace", amount: 1 },
+      // { typeGroup: "aura", stat: "atk", amount: 1, scope: "friendlyOthers" },
+    ],
   },
   {
     id: "002",

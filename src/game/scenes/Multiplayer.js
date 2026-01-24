@@ -34,6 +34,8 @@ import {
 } from "../core/constants.js";
 import { TurnManager } from "../core/TurnManager.js";
 import { RequestQueue } from "../core/RequestQueue.js";
+import { on, off } from "../core/events.js";
+import { getKeyword, Keyword } from "../core/KeywordRegistry.js";
 
 // ─────────────────────────────────────────────────────────────
 // Cosmetic constants (scene‑only — not needed by core logic)
@@ -170,6 +172,30 @@ export class Multiplayer extends Phaser.Scene {
       this.deckMap.set(self.id, deck);
       self.setState("deckSize", deck.size(), true); // 5
       this.reqQueue.players.push(self);
+
+      // guard against hot-reloads/scene re-entry registering twice
+      if (!this._keywordsListenersBound) {
+        on("minionPlayed", (ctx) =>
+          getKeyword(Keyword.BATTLECRY)?.onMinionPlayed?.(ctx)
+        );
+        on("minionDied", (ctx) =>
+          getKeyword(Keyword.DEATHRATTLE)?.onMinionDied?.(ctx)
+        );
+        on("turnStart", (ctx) => {
+          getKeyword(Keyword.WINDFURY)?.onTurnStart?.(ctx);
+          getKeyword(Keyword.START_OF_TURN)?.onTurnStart?.(ctx);
+        });
+
+        this._keywordsListenersBound = true;
+
+        // Optional: clean up on scene shutdown to avoid leaks on remounts
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+          off("minionPlayed");
+          off("minionDied");
+          off("turnStart");
+          this._keywordsListenersBound = false;
+        });
+      }
     }
 
     /* 3. player join ─────────────────────────────── */
@@ -1001,6 +1027,10 @@ export class Multiplayer extends Phaser.Scene {
 
     if (rej.reason === "badTarget") {
       this.ui.toast("❌ You cannot attack this card!");
+    }
+
+    if (rej.reason === "mustHitTaunt") {
+      this.ui.toast("❌ A minion with Taunt is protecting its allies.");
     }
 
     // clear reject after showing

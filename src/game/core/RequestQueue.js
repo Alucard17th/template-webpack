@@ -1,9 +1,9 @@
 import { MAX_MANA, HEALTH_POINTS } from "./constants.js";
 import { applyCreatureDamage, resolveSpell } from "./Combat.js";
 import { TurnManager } from "./TurnManager.js";
-
 import { getState, setState } from "playroomkit";
-
+import { emit } from "../core/events.js";
+import { getLegalMinionTargets, defenderHasAnyCreature } from "./targeting.js";
 /**
  * Central authority that **hosts** run every TICK_MS.
  *   scene code should just forward `player.getState('request')` here.
@@ -85,8 +85,26 @@ export class RequestQueue {
     // ✅ Set boardState if creature
     if (card?.type === "creature") {
       const bs = p.getState("boardState") || {};
-      bs[uid] = { atk: card.attack, hp: card.health };
+      // const tags = {};
+      // if (card.keywords?.includes("taunt")) tags.taunt = true;
+      // if (card.keywords?.includes("charge")) tags.charge = true;
+      // if (card.keywords?.includes("divineShield")) tags.divineShield = true;
+      // if (card.keywords?.includes("windfury")) tags.windfury = true;
+      const tags = (card.keywords || []).reduce(
+        (a, k) => ((a[k] = true), a),
+        {}
+      );
+      bs[uid] = { atk: card.attack, hp: card.health, tags, attacksLeft: 1 };
       p.setState("boardState", bs, true);
+
+      // 🔔 Emit event for systems that care (battlecry, aura, triggers)
+      emit("minionPlayed", {
+        caster: p,
+        opponent: this.players.find((x) => x.id !== p.id),
+        uid,
+        base: card,
+        deckMap: this.turnManager.deckMap,
+      });
     }
 
     // ✅ Add to graveyard if spell
@@ -132,9 +150,122 @@ export class RequestQueue {
     );
   }
 
+  // _handleAttack(p, { src, dst }) {
+  //   /** ------------------------------------------------------------
+  //    *  0.  Fast guards & common state
+  //    * ----------------------------------------------------------- */
+  //   const board = p.getState("board") || [];
+  //   if (!board.includes(src)) return; // bad id
+
+  //   const opponent = this._getOpponent(p);
+  //   const oppBoard = opponent?.getState("board") || [];
+
+  //   const myBS = p.getState("boardState") || {};
+  //   const oppBS = opponent?.getState("boardState") || {};
+
+  //   const already = (p.getState("hasAttacked") || {})[src];
+  //   if (already) return; // one action / turn
+
+  //   const baseId = src.split("#")[0];
+  //   const srcCard = this.CARDS_BY_ID[baseId];
+
+  //   /** ------------------------------------------------------------
+  //    *  1.  SPELL branch  ➜  resolveSpell()
+  //    * ----------------------------------------------------------- */
+  //   if (srcCard.type === "spell") {
+  //     // 1-a : validate target id
+  //     if (dst !== "player" && !board.includes(dst) && !oppBoard.includes(dst))
+  //       return;
+
+  //     if (
+  //       !this._isValidSpellTarget(srcCard, dst, p, opponent, this.CARDS_BY_ID)
+  //     ) {
+  //       // optional feedback toast
+  //       p.setState("reject", { reason: "badTarget" }, true);
+  //       return; // DO NOT consume the spell
+  //     }
+
+  //     // 1-b : apply the spell effect
+  //     resolveSpell(
+  //       srcCard,
+  //       src,
+  //       dst,
+  //       p,
+  //       opponent,
+  //       this.CARDS_BY_ID,
+  //       this.turnManager.deckMap
+  //     );
+
+  //     // 1-c : move spell from board to graveyard
+  //     p.setState(
+  //       "board",
+  //       board.filter((id) => id !== src),
+  //       true
+  //     );
+  //     const gy = p.getState("graveyard") || [];
+  //     gy.push(src);
+  //     p.setState("graveyard", gy, true);
+
+  //     this._flagAsAttacked(p, src);
+
+  //     // 1-d : broadcast animation
+  //     setState(
+  //       "animEvent",
+  //       { type: "cardAttack", playerId: p.id, src, dst },
+  //       true
+  //     );
+  //     return; // SPELL handled
+  //   }
+
+  //   /** ------------------------------------------------------------
+  //    *  2.  CREATURE branch
+  //    * ----------------------------------------------------------- */
+  //   const attackerStats = myBS[src];
+  //   if (!attackerStats) return; // should exist
+
+  //   /* ── 2-a  attacking an enemy creature ────────────────────── */
+  //   if (oppBoard.includes(dst)) {
+  //     const defenderBase = dst.split("#")[0];
+  //     const defenderCard = this.CARDS_BY_ID[defenderBase];
+
+  //     applyCreatureDamage(src, dst, p, opponent, srcCard, defenderCard);
+
+  //     this._flagAsAttacked(p, src);
+  //   } else if (dst === "player") {
+  //     /* ── 2-b  attacking the opponent’s face ───────────────────── */
+  //     const oppHasCreature = oppBoard.some((uid) => {
+  //       const bid = uid.split("#")[0];
+  //       return this.CARDS_BY_ID[bid]?.type === "creature";
+  //     });
+
+  //     if (oppHasCreature) {
+  //       p.setState("reject", { reason: "protectedFace" }, true);
+  //       return;
+  //     }
+
+  //     const hp = opponent.getState("hp") ?? 0;
+  //     opponent.setState("hp", hp - attackerStats.atk, true);
+  //     this._flagAsAttacked(p, src);
+  //   }
+
+  //   /* ── 2-c  sync + animation ───────────────────────────────── */
+  //   // boardState objects may have changed inside helpers
+  //   opponent.setState("boardState", opponent.getState("boardState"), true);
+  //   p.setState("boardState", p.getState("boardState"), true);
+
+  //   setState(
+  //     "animEvent",
+  //     { type: "cardAttack", playerId: p.id, src, dst },
+  //     true
+  //   );
+  // }
+
+  /* =========================
+   * Refactored _handleAttack
+   * ========================= */
   _handleAttack(p, { src, dst }) {
     /** ------------------------------------------------------------
-     *  0.  Fast guards & common state
+     *  0) Fast guards & common state
      * ----------------------------------------------------------- */
     const board = p.getState("board") || [];
     if (!board.includes(src)) return; // bad id
@@ -152,7 +283,7 @@ export class RequestQueue {
     const srcCard = this.CARDS_BY_ID[baseId];
 
     /** ------------------------------------------------------------
-     *  1.  SPELL branch  ➜  resolveSpell()
+     *  1) SPELL branch  ➜  resolveSpell()
      * ----------------------------------------------------------- */
     if (srcCard.type === "spell") {
       // 1-a : validate target id
@@ -200,27 +331,29 @@ export class RequestQueue {
     }
 
     /** ------------------------------------------------------------
-     *  2.  CREATURE branch
+     *  2) CREATURE branch
      * ----------------------------------------------------------- */
     const attackerStats = myBS[src];
     if (!attackerStats) return; // should exist
 
     /* ── 2-a  attacking an enemy creature ────────────────────── */
     if (oppBoard.includes(dst)) {
+      // TAUNT gate: if any taunts exist on defender board, you must hit one of them
+      const legal = getLegalMinionTargets(opponent);
+      if (!legal.includes(dst)) {
+        p.setState("reject", { reason: "mustHitTaunt" }, true);
+        return;
+      }
+
       const defenderBase = dst.split("#")[0];
       const defenderCard = this.CARDS_BY_ID[defenderBase];
 
       applyCreatureDamage(src, dst, p, opponent, srcCard, defenderCard);
-
       this._flagAsAttacked(p, src);
     } else if (dst === "player") {
-      /* ── 2-b  attacking the opponent’s face ───────────────────── */
-      const oppHasCreature = oppBoard.some((uid) => {
-        const bid = uid.split("#")[0];
-        return this.CARDS_BY_ID[bid]?.type === "creature";
-      });
-
-      if (oppHasCreature) {
+      /* ── 2-b  attacking the opponent’s face (strict rule) ───── */
+      // Face is blocked whenever defender has ANY creature.
+      if (defenderHasAnyCreature(opponent, this.CARDS_BY_ID)) {
         p.setState("reject", { reason: "protectedFace" }, true);
         return;
       }
@@ -228,6 +361,9 @@ export class RequestQueue {
       const hp = opponent.getState("hp") ?? 0;
       opponent.setState("hp", hp - attackerStats.atk, true);
       this._flagAsAttacked(p, src);
+    } else {
+      // Unknown target: ignore
+      return;
     }
 
     /* ── 2-c  sync + animation ───────────────────────────────── */
