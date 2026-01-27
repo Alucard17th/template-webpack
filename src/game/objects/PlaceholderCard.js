@@ -64,6 +64,7 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       hitAreaCallback: Phaser.Geom.Rectangle.Contains,
     });
     this._setupHover();
+    this._setupIdle();
 
     scene.add.existing(this);
 
@@ -179,7 +180,11 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
     this.add(art);
 
     // faux 3‑D depth faces use frame colour so they inherit theme
-    // this._addDepthFaces(6, PlaceholderCard.COLORS.frame);
+    if (!this.isCardBack) {
+      this._addDepthFaces(7, PlaceholderCard.THEME.goldDark);
+      const faces = [this._depthRight, this._depthBottom].filter(Boolean);
+      faces.forEach((f) => f.setAlpha(0.75));
+    }
   }
 
   _addDepthFaces(depthPx = 6, clr = PlaceholderCard.COLORS.frame) {
@@ -393,7 +398,10 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
     const BASE = 1;
     const HOVER = 1.22;
     this.on("pointerover", () => {
+      this._prevDepth = this.depth;
       this.setDepth(9999);
+      this._isHovering = true;
+      if (this._idleTween) this._idleTween.pause();
 
       if (!this._hoverGlow) {
         const g = this.scene.add.graphics();
@@ -429,7 +437,8 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       }
     });
     this.on("pointerout", () => {
-      this.setDepth(0);
+      this.setDepth(Number.isFinite(this._prevDepth) ? this._prevDepth : 0);
+      this._isHovering = false;
 
       if (this._hoverGlow) this._hoverGlow.setAlpha(0);
       if (this._shadowGfx) this._shadowGfx.setAlpha(0.22);
@@ -449,6 +458,26 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
           ease: "quad.in",
         });
       }
+
+      if (this._idleTween) this._idleTween.resume();
+    });
+  }
+
+  _setupIdle() {
+    if (this.isCardBack) return;
+    const drift = Phaser.Math.Between(2, 4);
+    const tilt = Phaser.Math.FloatBetween(-0.45, 0.45);
+    const d = Phaser.Math.Between(2300, 3400);
+
+    this._idleTween = this.scene.tweens.add({
+      targets: this,
+      y: this._baseY - drift,
+      angle: tilt,
+      duration: d,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+      delay: Phaser.Math.Between(0, 700),
     });
   }
 

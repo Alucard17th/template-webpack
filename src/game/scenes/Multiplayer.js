@@ -84,6 +84,7 @@ export class Multiplayer extends Phaser.Scene {
     this._setupReconnectKey();
     this._setupGraveyardUi();
     this._setupSceneUi();
+    this._setupAmbientFx();
     this._setupCoreSystems();
     this._setupHostOnly();
     this._setupHostSnapshotSync();
@@ -140,6 +141,17 @@ export class Multiplayer extends Phaser.Scene {
         .setPosition(gs.width / 2, gs.height / 2);
     });
 
+    this._bgDriftTween?.stop();
+    this._bgDriftTween = this.tweens.add({
+      targets: this.bg,
+      x: this.scale.width / 2 + 14,
+      y: this.scale.height / 2 + 10,
+      duration: 5200,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
+
     this.ui = new UI(this);
     this.myHand = this.add.group();
     this.oppHand = this.add.group();
@@ -166,6 +178,89 @@ export class Multiplayer extends Phaser.Scene {
 
     this._createUiElements();
     this.screenMidX = (this.scale.width - 360) / 2;
+  }
+
+  _setupAmbientFx() {
+    const ensureDustTex = () => {
+      if (this.textures.exists("dustParticle")) return;
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(6, 6, 6);
+      g.generateTexture("dustParticle", 12, 12);
+      g.destroy();
+    };
+
+    const layout = () => {
+      const w = this.scale.width;
+      const h = this.scale.height;
+      this._vignette?.clear();
+      if (this._vignette) {
+        this._vignette.fillStyle(0x000000, 0.14);
+        this._vignette.fillRect(0, 0, w, 70);
+        this._vignette.fillRect(0, h - 70, w, 70);
+        this._vignette.fillStyle(0x000000, 0.12);
+        this._vignette.fillRect(0, 0, 70, h);
+        this._vignette.fillRect(w - 70, 0, 70, h);
+      }
+
+      if (this._bloom) {
+        this._bloom.setPosition(w / 2, h / 2);
+      }
+    };
+
+    this._vignette?.destroy();
+    this._vignette = this.add.graphics().setDepth(-50).setScrollFactor(0);
+    this._vignette.setBlendMode(Phaser.BlendModes.MULTIPLY);
+
+    this._bloom?.destroy();
+    this._bloom = this.add
+      .circle(this.scale.width / 2, this.scale.height / 2, 340, 0xffffff, 0.06)
+      .setDepth(-60)
+      .setScrollFactor(0);
+    this._bloom.setBlendMode(Phaser.BlendModes.ADD);
+
+    this._bloomTween?.stop();
+    this._bloomTween = this.tweens.add({
+      targets: this._bloom,
+      alpha: 0.09,
+      duration: 3200,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
+
+    ensureDustTex();
+    this._dustEmitter?.manager?.destroy();
+    this._dustParticles = this.add.particles(0, 0, "dustParticle", {
+      x: { min: -40, max: this.scale.width + 40 },
+      y: { min: -40, max: this.scale.height + 40 },
+      lifespan: { min: 5200, max: 9200 },
+      speedX: { min: -10, max: 10 },
+      speedY: { min: -6, max: 6 },
+      scale: { start: 0.10, end: 0 },
+      alpha: { start: 0.10, end: 0 },
+      quantity: 1,
+      frequency: 140,
+      blendMode: "ADD",
+    });
+    this._dustParticles.setDepth(-70).setScrollFactor(0);
+    this._dustEmitter = this._dustParticles.emitters?.getAt?.(0) || null;
+
+    layout();
+    this.scale.on("resize", () => {
+      layout();
+      if (this._dustEmitter) {
+        this._dustEmitter.setEmitZone({
+          type: "random",
+          source: new Phaser.Geom.Rectangle(
+            -40,
+            -40,
+            this.scale.width + 80,
+            this.scale.height + 80
+          ),
+        });
+      }
+    });
   }
 
   _setupCoreSystems() {
