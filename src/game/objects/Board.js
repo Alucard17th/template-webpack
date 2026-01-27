@@ -1,6 +1,7 @@
+import Phaser from "phaser";
 import { myPlayer } from "playroomkit";
-import { PlaceholderCard } from "../objects/PlaceholderCard";
-import { CARDS_BY_ID } from "../../data/cards";
+import { PlaceholderCard } from "../objects/PlaceholderCard.js";
+import { CARDS_BY_ID } from "../../data/cards.js";
 import {
   CARD_COLORS, // 🎨 single‑source palette
 } from "../core/constants.js";

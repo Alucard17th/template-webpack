@@ -7,7 +7,7 @@ import { Preloader } from "./scenes/Preloader";
 
 import { Multiplayer } from "./scenes/Multiplayer";
 
-import { AUTO, Game } from "phaser";
+import Phaser, { AUTO, Game } from "phaser";
 
 // Find out more information about the Game Config at:
 // https://docs.phaser.io/api-documentation/typedef/types-core#gameconfig
