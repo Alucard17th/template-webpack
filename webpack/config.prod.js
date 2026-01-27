@@ -14,7 +14,8 @@ module.exports = {
     entry: "./src/main.js",
     output: {
         path: path.resolve(process.cwd(), 'dist'),
-        filename: "./bundle.min.js"
+        filename: "./bundle.min.js",
+        publicPath: "./"
     },
     devtool: false,
     performance: {
@@ -70,7 +71,8 @@ module.exports = {
             patterns: [
                 { from: 'public/assets', to: 'assets' },
                 { from: 'public/favicon.png', to: 'favicon.png' },
-                { from: 'public/style.css', to: 'style.css' }
+                { from: 'public/style.css', to: 'style.css' },
+                { from: 'public/styles', to: 'styles' }
             ],
         }),
     ]
