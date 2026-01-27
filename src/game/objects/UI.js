@@ -3,6 +3,18 @@ const MANA_POINTS = 10;
 const BAR_W = 180;
 const BAR_H = 15;
 
+const THEME = {
+  ink: 0x2a1b12,
+  parchment: 0xf2e3c6,
+  parchmentDark: 0xd8c39a,
+  waxRed1: 0xd14a3a,
+  waxRed2: 0xa11f1a,
+  aetherBlue1: 0x4aa0d8,
+  aetherBlue2: 0x1f5c9b,
+  gold: 0xd0a84d,
+  goldDark: 0x7a5a18,
+};
+
 export class UI {
   constructor(scene) {
     this.scene = scene;
@@ -71,12 +83,35 @@ export class UI {
     const pct = Phaser.Math.Clamp(hp / max, 0, 1);
 
     gfx.clear();
-    gfx.fillStyle(0x222222);
-    gfx.fillRect(x, y, w, h);
-    gfx.fillStyle(0xff3b3b);
-    gfx.fillRect(x, y, w * pct, h);
-    gfx.lineStyle(1, 0xffffff);
-    gfx.strokeRect(x, y, w, h);
+
+    const r = 7;
+    // shadow
+    gfx.fillStyle(THEME.ink, 0.22);
+    gfx.fillRoundedRect(x + 1, y + 2, w, h, r);
+
+    // base (parchment)
+    gfx.fillStyle(THEME.parchmentDark, 0.95);
+    gfx.fillRoundedRect(x, y, w, h, r);
+
+    // fill (gradient)
+    const fillW = Math.max(0, w * pct);
+    if (fillW > 0) {
+      gfx.fillGradientStyle(
+        THEME.waxRed1,
+        THEME.waxRed1,
+        THEME.waxRed2,
+        THEME.waxRed1,
+        1
+      );
+      gfx.fillRoundedRect(x, y, fillW, h, r);
+      // glossy highlight
+      gfx.fillStyle(0xffffff, 0.12);
+      gfx.fillRoundedRect(x + 1, y + 1, fillW - 2, Math.max(1, h * 0.45), r);
+    }
+
+    // border
+    gfx.lineStyle(1.5, THEME.ink, 0.55);
+    gfx.strokeRoundedRect(x, y, w, h, r);
 
     return { left: x, cy: y + h / 2 };
   }
@@ -88,12 +123,30 @@ export class UI {
     const pct = Phaser.Math.Clamp(mana / max, 0, 1);
 
     gfx.clear();
-    gfx.fillStyle(0x222222);
-    gfx.fillRect(x, y, w, h);
-    gfx.fillStyle(0x0080ff);
-    gfx.fillRect(x, y, w * pct, h);
-    gfx.lineStyle(1, 0xffffff);
-    gfx.strokeRect(x, y, w, h);
+
+    const r = 7;
+    gfx.fillStyle(THEME.ink, 0.22);
+    gfx.fillRoundedRect(x + 1, y + 2, w, h, r);
+
+    gfx.fillStyle(THEME.parchmentDark, 0.95);
+    gfx.fillRoundedRect(x, y, w, h, r);
+
+    const fillW = Math.max(0, w * pct);
+    if (fillW > 0) {
+      gfx.fillGradientStyle(
+        THEME.aetherBlue1,
+        THEME.aetherBlue1,
+        THEME.aetherBlue2,
+        THEME.aetherBlue1,
+        1
+      );
+      gfx.fillRoundedRect(x, y, fillW, h, r);
+      gfx.fillStyle(0xffffff, 0.12);
+      gfx.fillRoundedRect(x + 1, y + 1, fillW - 2, Math.max(1, h * 0.45), r);
+    }
+
+    gfx.lineStyle(1.5, THEME.ink, 0.55);
+    gfx.strokeRoundedRect(x, y, w, h, r);
 
     // cache geometry & value for flashing
     const cache = { x, y, w, h, mana, max };
@@ -109,33 +162,63 @@ export class UI {
       h = 48;
 
     // Start position: bottom-right minus offsets
-    const x = this.scene.scale.width - w / 2 - offsetX;
-    const y = this.scene.scale.height - h / 2 - offsetY;
+    let x = this.scene.scale.width - w / 2 - offsetX;
+    let y = this.scene.scale.height - h / 2 - offsetY;
 
-    const rect = this.scene.add
-      .rectangle(x, y, w, h, 0x145214)
-      .setStrokeStyle(2, 0xffffff)
+    const bg = this.scene.add.graphics();
+    const draw = (fill = THEME.parchment, alpha = 1, glow = false) => {
+      bg.clear();
+      // subtle shadow
+      bg.fillStyle(THEME.ink, 0.22);
+      bg.fillRoundedRect(x - w / 2 + 2, y - h / 2 + 3, w, h, 12);
+
+      // main
+      if (glow) {
+        bg.fillStyle(THEME.gold, 0.18);
+        bg.fillRoundedRect(x - w / 2 - 6, y - h / 2 - 6, w + 12, h + 12, 16);
+      }
+
+      bg.fillStyle(fill, alpha);
+      bg.fillRoundedRect(x - w / 2, y - h / 2, w, h, 12);
+
+      // highlight
+      bg.fillStyle(0xffffff, 0.14);
+      bg.fillRoundedRect(x - w / 2 + 2, y - h / 2 + 2, w - 4, h * 0.42, 10);
+
+      bg.lineStyle(2, THEME.goldDark, 0.75);
+      bg.strokeRoundedRect(x - w / 2, y - h / 2, w, h, 12);
+
+      bg.lineStyle(1.5, THEME.gold, 0.6);
+      bg.strokeRoundedRect(x - w / 2 + 2, y - h / 2 + 2, w - 4, h - 4, 10);
+    };
+
+    draw(THEME.parchment, 1, false);
+
+    const hit = this.scene.add
+      .zone(x, y, w, h)
+      .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
 
     const label = this.scene.add
       .text(x, y, "End Turn", {
         fontSize: 24,
-        color: "#fff",
+        color: "#2a1b12",
+        fontStyle: "bold",
       })
       .setOrigin(0.5);
 
-    rect.on("pointerover", () => rect.setAlpha(0.85));
-    rect.on("pointerout", () => rect.setAlpha(1));
-    rect.on("pointerdown", () => rect.setFillStyle(0x0aff0a));
-    rect.on("pointerup", () => {
-      rect.setFillStyle(0x145214);
+    hit.on("pointerover", () => draw(THEME.parchmentDark, 1, true));
+    hit.on("pointerout", () => draw(THEME.parchment, 1, false));
+    hit.on("pointerdown", () => draw(THEME.parchmentDark, 1, true));
+    hit.on("pointerup", () => {
+      draw(THEME.parchment, 1, false);
       if (getState("turnPlayerId") === myPlayer().id) {
         myPlayer().setState("request", { endTurn: true });
       }
     });
 
     const container = this.scene.add
-      .container(0, 0, [rect, label])
+      .container(0, 0, [bg, hit, label])
       .setSize(w, h)
       .setVisible(false);
 
@@ -144,8 +227,16 @@ export class UI {
       const { width, height } = gameSize;
       const newX = width - w / 2 - offsetX;
       const newY = height - h / 2 - offsetY;
-      rect.setPosition(newX, newY);
+      hit.setPosition(newX, newY);
       label.setPosition(newX, newY);
+
+      // redraw button at new position
+      // (draw uses captured x/y, so we update them via closure by mutating)
+      // eslint-disable-next-line no-param-reassign
+      x = newX;
+      // eslint-disable-next-line no-param-reassign
+      y = newY;
+      draw(THEME.parchment, 1, false);
     });
 
     return container;
@@ -421,24 +512,24 @@ export class UI {
 
     g.clear();
 
-    // 🔵 Player board background (bottom half)
-    g.fillStyle(0x003366, 0.25); // dark blue with opacity
+    // Player board background (bottom half) - parchment wash
+    g.fillStyle(THEME.parchment, 0.18);
     g.fillRect(0, midY, w, h - midY);
 
-    // 🔴 Opponent board background (top half)
-    g.fillStyle(0x660000, 0.25); // dark red with opacity
+    // Opponent board background (top half) - slightly darker wash
+    g.fillStyle(THEME.parchmentDark, 0.16);
     g.fillRect(0, 0, w, midY);
 
     // Divider line
     if (dashed) {
       this._strokeDashed(g, pad, midY, w - pad, {
-        color: 0xff3b3b,
+        color: THEME.goldDark,
         width,
         dash: 14,
         gap: 8,
       });
     } else {
-      g.lineStyle(width, 0xff3b3b, 1);
+      g.lineStyle(width, THEME.goldDark, 0.9);
       g.beginPath();
       g.moveTo(pad, midY);
       g.lineTo(w - pad, midY);

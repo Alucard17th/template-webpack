@@ -129,8 +129,7 @@ export function resolveSpell(
     log: (msg) => {
       // you can pipe this into your scene log if you like:
       // this.turnManager.scene?.addLog?.(`[SPELL] ${msg}`);
-      // For now:
-      console.log("COMBAT resolveSpell [SPELL]: ", msg);
+      // For now: no-op to avoid console spam during gameplay.
     },
   });
 }

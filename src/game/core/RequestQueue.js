@@ -462,7 +462,6 @@ export class RequestQueue {
     if (alive.length === 1) {
       const winner = alive[0];
       setState("gameOver", { winnerId: winner.id }, true); // broadcast
-      console.log("[GAME OVER] winner →", winner.id);
     }
   }
 }

@@ -43,7 +43,6 @@ export class Board extends Phaser.GameObjects.Group {
 
   /** ids MUST be UIDs like "005#17" */
   render(ids) {
-    console.log("[Board] render()", ids);
     if (!ids || !this.group) return;
 
     this.group.clear(true, true);
@@ -111,11 +110,6 @@ export class Board extends Phaser.GameObjects.Group {
         } else if (card.atkDefText) {
           card.atkDefText.setText(`⚔️${data.attack}|❤️${hpToShow}`);
         }
-
-        console.log("[Board] rendering creature hpMap", hpMap[uid]);
-        console.log("[Board] rendering creature data", data);
-        console.log("[Board] rendering creature hpToShow", hpToShow);
-        console.log("[Board] rendering creature card", card);
       } else {
         // spells — optional tag/value
         if (card.atkDefText) {

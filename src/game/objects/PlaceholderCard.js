@@ -18,6 +18,14 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
   // ⬇️  expose palette locally for brevity (no mutation!)
   static COLORS = CARD_COLORS;
 
+  static THEME = {
+    ink: 0x2a1b12,
+    parchment: 0xf2e3c6,
+    parchmentDark: 0xd8c39a,
+    gold: 0xd0a84d,
+    goldDark: 0x7a5a18,
+  };
+
   constructor(scene, baseId, x = PlaceholderCard.W + 10, y, uid = null) {
     super(scene, x, y);
     this.scene = scene;
@@ -25,17 +33,30 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
     this.uid = uid ?? baseId;
     this.isCard = true;
 
+    this.isCardBack = baseId === "CARD_BACK";
+
+    this._baseX = x;
+    this._baseY = y;
+
     this.cardWidth = PlaceholderCard.W;
     this.cardHeight = PlaceholderCard.H;
 
+    this._layout = {
+      headerH: 34,
+      footerH: 26,
+      innerPad: 8,
+    };
+
     // ── layers
     this._addDropShadow();
-    // this._addBaseShape();
+    this._addBaseShape();
     this._addArtwork();
 
-    const data = CARDS.find((c) => c.id === baseId) || {};
-    this._buildNameAndCost(data);
-    this._buildTypeOverlay(data);
+    const data = this.isCardBack ? {} : CARDS.find((c) => c.id === baseId) || {};
+    if (!this.isCardBack) {
+      this._buildNameAndCost(data);
+      this._buildTypeOverlay(data);
+    }
 
     this.setSize(this.cardWidth, this.cardHeight);
     this.setInteractive({
@@ -62,7 +83,7 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
   // ─────────────────────────────────────────────────────────── visuals
   _addDropShadow() {
     const g = this.scene.add.graphics();
-    g.fillStyle(PlaceholderCard.COLORS.shadow, 0.3);
+    g.fillStyle(PlaceholderCard.THEME.ink, 0.22);
     g.fillRoundedRect(
       -this.cardWidth / 2 + 4,
       -this.cardHeight / 2 + 6,
@@ -71,11 +92,13 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       PlaceholderCard.CORNER + 4
     );
     this.add(g);
+    this._shadowGfx = g;
   }
 
   _addBaseShape() {
     const g = this.scene.add.graphics();
-    g.fillStyle(PlaceholderCard.COLORS.frame, 0.9);
+    const { parchment, parchmentDark, gold, goldDark } = PlaceholderCard.THEME;
+    g.fillStyle(parchmentDark, 0.98);
     g.fillRoundedRect(
       -this.cardWidth / 2,
       -this.cardHeight / 2,
@@ -83,34 +106,75 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       this.cardHeight,
       PlaceholderCard.CORNER
     );
-    g.lineStyle(10, PlaceholderCard.COLORS.base, 1);
+
+    // inner parchment plate
+    g.fillStyle(parchment, 0.94);
+    g.fillRoundedRect(
+      -this.cardWidth / 2 + 5,
+      -this.cardHeight / 2 + 5,
+      this.cardWidth - 10,
+      this.cardHeight - 10,
+      PlaceholderCard.CORNER
+    );
+
+    // trim
+    g.lineStyle(6, goldDark, 0.75);
     g.strokeRoundedRect(
-      -this.cardWidth / 2,
-      -this.cardHeight / 2,
-      this.cardWidth,
-      this.cardHeight,
+      -this.cardWidth / 2 + 1,
+      -this.cardHeight / 2 + 1,
+      this.cardWidth - 2,
+      this.cardHeight - 2,
+      PlaceholderCard.CORNER + 2
+    );
+    g.lineStyle(2, gold, 0.7);
+    g.strokeRoundedRect(
+      -this.cardWidth / 2 + 5,
+      -this.cardHeight / 2 + 5,
+      this.cardWidth - 10,
+      this.cardHeight - 10,
       PlaceholderCard.CORNER
     );
     this.add(g);
+    this._frameGfx = g;
   }
 
   _addArtwork() {
-    const data = CARDS.find((c) => c.id === this.cardId) || {};
-    const texKey = (data.frame || "").trim();
+    const data = this.isCardBack ? {} : CARDS.find((c) => c.id === this.cardId) || {};
+    const texKey = this.isCardBack ? "appLogo" : (data.frame || "").trim();
+
+    // Reserve space for the title plate and bottom stats bar.
+    const topInset = (this._layout?.headerH ?? 38) + 8;
+    const bottomInset = this._layout?.footerH ?? 26;
+    const innerPad = this._layout?.innerPad ?? 8;
+    const safeH = this.cardHeight - topInset - bottomInset;
+    const safeY = -this.cardHeight / 2 + topInset + safeH / 2;
+
+    // NOTE: We intentionally avoid GeometryMask here. In Phaser, GeometryMask + Containers
+    // can be brittle and may clip the artwork entirely depending on transform/order.
+    // Instead, we keep the layout UX-friendly by sizing/centering the artwork into the
+    // safe region (between header and footer).
+    if (this._artMaskG) {
+      this._artMaskG.destroy();
+      this._artMaskG = null;
+    }
 
     let art;
     if (texKey && this.scene.textures.exists(texKey)) {
-      art = this.scene.add.image(0, 0, texKey).setOrigin(0.5);
+      art = this.scene.add.image(0, safeY, texKey).setOrigin(0.5);
       const src = this.scene.textures.get(texKey).getSourceImage();
       const scale = Math.min(
-        this.cardWidth / src.width,
-        this.cardHeight / src.height
+        (this.cardWidth - innerPad * 2) / src.width,
+        safeH / src.height
       );
       art.setScale(scale);
     } else {
       art = this.scene.add
-        .rectangle(0, 0, this.cardWidth, this.cardHeight, 0xffffff)
+        .rectangle(0, safeY, this.cardWidth - innerPad * 2, safeH, 0xffffff)
         .setOrigin(0.5);
+    }
+
+    if (this.isCardBack) {
+      art.setAlpha(0.9);
     }
     this.add(art);
 
@@ -154,43 +218,85 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
 
   // ───────────────────────────────────────────────────── overlays
   _buildNameAndCost(data) {
-    const PAD = 4;
+    const PAD = 6;
     const yTop = -this.cardHeight / 2;
+    const headerH = this._layout?.headerH ?? 38;
     const fixedWidth = this.cardWidth - PAD * 2;
 
+    const { ink, parchment, parchmentDark, gold, goldDark } =
+      PlaceholderCard.THEME;
+
+    const fullName = data.name || "?";
+
     const nameText = this.scene.add
-      .text(PAD, yTop, data.name || "?", {
-        fontSize: "18px",
-        color: PlaceholderCard.COLORS.hexNameText,
+      .text(0, yTop + PAD, fullName, {
+        fontFamily: "Georgia, serif",
+        fontSize: "17px",
+        color: "#2a1b12",
         fontStyle: "bold",
-        align: "center",
-        padding: { y: PAD },
-        wordWrap: { width: fixedWidth, useAdvancedWrap: true },
-        fixedWidth,
       })
       .setOrigin(0.5, 0);
 
-    const nb = nameText.getBounds();
     const nameBg = this.scene.add.graphics();
-    nameBg.fillStyle(PlaceholderCard.COLORS.nameBg, 0.3).fillRoundedRect(
-      -this.cardWidth / 2 + PAD, // x
-      yTop + PAD, // y
-      this.cardWidth, // width
-      nb.height + PAD * 2, // height
-      PlaceholderCard.CORNER + 4 // corner radius
-    );
+    const bgX = -this.cardWidth / 2 + PAD;
+    const bgY = yTop + PAD;
+    const bgW = this.cardWidth - PAD * 2;
+    const bgH = headerH;
+    nameBg
+      .fillStyle(parchmentDark, 0.85)
+      .fillRoundedRect(bgX + 1, bgY + 2, bgW, bgH, PlaceholderCard.CORNER + 5)
+      .fillStyle(parchment, 0.92)
+      .fillRoundedRect(bgX, bgY, bgW, bgH, PlaceholderCard.CORNER + 5)
+      .lineStyle(2, goldDark, 0.7)
+      .strokeRoundedRect(bgX, bgY, bgW, bgH, PlaceholderCard.CORNER + 5)
+      .lineStyle(1, gold, 0.55)
+      .strokeRoundedRect(
+        bgX + 2,
+        bgY + 2,
+        bgW - 4,
+        bgH - 4,
+        PlaceholderCard.CORNER + 4
+      );
 
-    const radius = 22;
+    // Pixel-width based ellipsis so the title always fits the header.
+    // The cost badge sits outside the centered title area, so do not reserve most of the header width.
+    const maxTextW = Math.max(10, bgW - 8);
+    if (typeof fullName === "string") {
+      nameText.setText(fullName);
+      if (nameText.width > maxTextW) {
+        let s = fullName;
+        // prevent pathological loops
+        for (let i = 0; i < 80 && s.length > 0; i++) {
+          s = s.slice(0, -1);
+          nameText.setText(`${s}...`);
+          if (nameText.width <= maxTextW) break;
+        }
+      }
+    }
+
+    // Keep the title inside the header plate (no overlap with artwork)
+    const availableH = bgH - 10;
+    for (let fs = 17; fs >= 12; fs--) {
+      nameText.setFontSize(fs);
+      if (nameText.height <= availableH) break;
+    }
+    nameText.setY(bgY + Math.max(4, Math.floor((bgH - nameText.height) / 2)));
+
+    const radius = 20;
     const badge = this.scene.add.graphics();
     badge
-      .fillStyle(PlaceholderCard.COLORS.costFill, 1)
-      .fillEllipse(0, 0, radius, radius);
-    badge.lineStyle(2, PlaceholderCard.COLORS.costStroke, 1);
+      .fillStyle(ink, 0.22)
+      .fillEllipse(2, 3, radius, radius)
+      .fillStyle(goldDark, 0.95)
+      .fillEllipse(0, 0, radius, radius)
+      .lineStyle(2, gold, 0.85)
+      .strokeEllipse(0, 0, radius, radius);
 
     const costText = this.scene.add
       .text(0, 0, String(data.cost ?? "?"), {
-        fontSize: "20px",
-        color: PlaceholderCard.COLORS.hexCostText,
+        fontFamily: "Georgia, serif",
+        fontSize: "18px",
+        color: "#fff8e6",
         fontStyle: "bold",
       })
       .setOrigin(0.5);
@@ -208,19 +314,31 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
   _buildTypeOverlay(data) {
     const PAD = 4;
     const innerW = this.cardWidth; // usable width inside the card
-    const y = this.cardHeight / 2 - 8;
+    const footerH = this._layout?.footerH ?? 26;
+    const y = this.cardHeight / 2 - (footerH / 2 + 4);
 
     /* full-width background bar, perfectly centred */
     const bar = this.scene.add
-      .rectangle(0 + PAD, y, innerW, 20, PlaceholderCard.COLORS.atkHpBg, 1)
+      .rectangle(0, y, innerW - PAD * 2, footerH, PlaceholderCard.THEME.parchmentDark, 0.9)
       .setOrigin(0.5);
+
+    const barStroke = this.scene.add.graphics();
+    barStroke
+      .lineStyle(2, PlaceholderCard.THEME.goldDark, 0.7)
+      .strokeRoundedRect(
+        -(innerW - PAD * 2) / 2,
+        y - footerH / 2,
+        innerW - PAD * 2,
+        footerH,
+        PlaceholderCard.CORNER + 4
+      );
 
     if (data.type === "creature") {
       /* ⚔️ ATK on the left, inside padding */
       const atkText = this.scene.add
         .text(-innerW / 2 + PAD, y, `⚔️${data.attack ?? "?"}`, {
           fontSize: "20px",
-          color: PlaceholderCard.COLORS.hexAtkText,
+          color: "#2a1b12",
           fontStyle: "bold",
           padding: { x: 6, y: 2 },
         })
@@ -230,13 +348,14 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       const hpText = this.scene.add
         .text(innerW / 2 - PAD, y, `❤️${data.health ?? "?"}`, {
           fontSize: "20px",
-          color: PlaceholderCard.COLORS.hexHpText,
+          color: "#2a1b12",
           fontStyle: "bold",
           padding: { x: 6, y: 2 },
         })
         .setOrigin(1, 0.5);
 
       this.add([bar, atkText, hpText]);
+      this.add(barStroke);
       this.atkText = atkText;
       this.hpText = hpText;
     } else {
@@ -255,7 +374,7 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
       const tag = this.scene.add
         .text(0, y, label, {
           fontSize: "22px",
-          color: PlaceholderCard.COLORS.hexSpellText,
+          color: "#2a1b12",
           fontStyle: "bold",
           padding: { x: 8, y: 4 },
           fixedWidth: innerW,
@@ -264,6 +383,7 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
         .setOrigin(0.5, 0.5);
 
       this.add([bar, tag]);
+      this.add(barStroke);
       this.spellTag = tag;
     }
   }
@@ -271,36 +391,64 @@ export class PlaceholderCard extends Phaser.GameObjects.Container {
   // Hover tween uses depth faces too
   _setupHover() {
     const BASE = 1;
-    const HOVER = 1.3;
+    const HOVER = 1.22;
     this.on("pointerover", () => {
       this.setDepth(9999);
+
+      if (!this._hoverGlow) {
+        const g = this.scene.add.graphics();
+        g.lineStyle(5, PlaceholderCard.THEME.gold, 0.22);
+        g.strokeRoundedRect(
+          -this.cardWidth / 2 - 6,
+          -this.cardHeight / 2 - 6,
+          this.cardWidth + 12,
+          this.cardHeight + 12,
+          PlaceholderCard.CORNER + 6
+        );
+        this.addAt(g, 99);
+        this._hoverGlow = g;
+      }
+      this._hoverGlow.setAlpha(1);
+
+      if (this._shadowGfx) this._shadowGfx.setAlpha(0.32);
       this.scene.tweens.add({
         targets: this,
         scale: HOVER,
+        y: this._baseY - 12,
         duration: 150,
         ease: "quad.out",
       });
-      this.scene.tweens.add({
-        targets: [this._depthRight, this._depthBottom],
-        alpha: 1,
-        duration: 150,
-        ease: "quad.out",
-      });
+      const faces = [this._depthRight, this._depthBottom].filter(Boolean);
+      if (faces.length) {
+        this.scene.tweens.add({
+          targets: faces,
+          alpha: 1,
+          duration: 150,
+          ease: "quad.out",
+        });
+      }
     });
     this.on("pointerout", () => {
       this.setDepth(0);
+
+      if (this._hoverGlow) this._hoverGlow.setAlpha(0);
+      if (this._shadowGfx) this._shadowGfx.setAlpha(0.22);
       this.scene.tweens.add({
         targets: this,
         scale: BASE,
+        y: this._baseY,
         duration: 150,
         ease: "quad.in",
       });
-      this.scene.tweens.add({
-        targets: [this._depthRight, this._depthBottom],
-        alpha: 0.75,
-        duration: 150,
-        ease: "quad.in",
-      });
+      const faces = [this._depthRight, this._depthBottom].filter(Boolean);
+      if (faces.length) {
+        this.scene.tweens.add({
+          targets: faces,
+          alpha: 0.75,
+          duration: 150,
+          ease: "quad.in",
+        });
+      }
     });
   }
 

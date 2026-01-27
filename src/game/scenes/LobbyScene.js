@@ -1,6 +1,5 @@
 import Phaser from "phaser";
 import {
-  insertCoin,
   myPlayer,
   getRoomCode,
   onPlayerJoin,
@@ -9,14 +8,8 @@ import {
   getState,
   setState,
 } from "playroomkit";
-import multiavatar from "@multiavatar/multiavatar/esm";
-
-function generateRandomAvatar() {
-  const seed = Math.random().toString(36).substring(2);
-  const svg = multiavatar(seed);
-  const dataURL = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-  return { seed, dataURL };
-}
+import { ensureInsertCoin } from "./lobbySession";
+import { CHARACTERS, CHARACTERS_BY_ID } from "../../data/characters.js";
 
 export class LobbyScene extends Phaser.Scene {
   players = [];
@@ -29,7 +22,7 @@ export class LobbyScene extends Phaser.Scene {
     const urlRoom = new URLSearchParams(window.location.hash.slice(1)).get(
       "room"
     );
-    await insertCoin({ skipLobby: true, roomCode: urlRoom || undefined });
+    await ensureInsertCoin({ skipLobby: true, roomCode: urlRoom || undefined });
 
     this.players = [...getParticipants()];
     this.roomCode = getRoomCode();
@@ -38,6 +31,12 @@ export class LobbyScene extends Phaser.Scene {
     this.container = document.createElement("div");
     this.container.classList.add("lobby-container");
     document.body.appendChild(this.container);
+
+    const switchBtn = document.createElement("button");
+    switchBtn.textContent = "Switch to 90's";
+    switchBtn.classList.add("lobby-switch-90s");
+    switchBtn.onclick = () => this.scene.start("LobbyWin98");
+    this.container.appendChild(switchBtn);
 
     /* ✅ Sections */
     this._buildRoomCodeSection();
@@ -128,21 +127,45 @@ export class LobbyScene extends Phaser.Scene {
     name.classList.add("lobby-input");
     wrap.appendChild(name);
 
-    let currentAvatar = generateRandomAvatar();
+    const initialCharacterId =
+      myPlayer()?.getState("profile")?.characterId || CHARACTERS[0]?.id;
+    this.selectedCharacterId =
+      (initialCharacterId && CHARACTERS_BY_ID[initialCharacterId]
+        ? initialCharacterId
+        : CHARACTERS[0]?.id) || "char-1";
 
-    const avatarImg = document.createElement("img");
-    avatarImg.src = currentAvatar.dataURL;
-    avatarImg.classList.add("avatar-img-large");
-    wrap.appendChild(avatarImg);
+    const pickerTitle = document.createElement("div");
+    pickerTitle.classList.add("lobby-picker-title");
+    pickerTitle.textContent = "Choose a Character";
+    wrap.appendChild(pickerTitle);
 
-    const randomBtn = document.createElement("button");
-    randomBtn.textContent = "🎲 Randomize Avatar";
-    randomBtn.classList.add("lobby-btn", "secondary");
-    randomBtn.onclick = () => {
-      currentAvatar = generateRandomAvatar();
-      avatarImg.src = currentAvatar.dataURL;
+    const picker = document.createElement("div");
+    picker.classList.add("lobby-character-picker");
+
+    const renderPicker = () => {
+      picker.innerHTML = CHARACTERS.map((c) => {
+        const selected = c.id === this.selectedCharacterId ? "selected" : "";
+        const src = `./assets/${c.imagePath}`;
+        return `
+          <button class="lobby-character-card ${selected}" data-char="${c.id}">
+            <img class="lobby-character-img" src="${src}" alt="${c.name}">
+            <div class="lobby-character-name">${c.name}</div>
+          </button>
+        `;
+      }).join("");
     };
-    wrap.appendChild(randomBtn);
+
+    renderPicker();
+    picker.addEventListener("click", (e) => {
+      const btn = e.target.closest(".lobby-character-card");
+      if (!btn) return;
+      const id = btn.getAttribute("data-char");
+      if (!id || !CHARACTERS_BY_ID[id]) return;
+      this.selectedCharacterId = id;
+      renderPicker();
+    });
+
+    wrap.appendChild(picker);
 
     const readyBtn = document.createElement("button");
     readyBtn.textContent = "✔ Ready";
@@ -178,7 +201,7 @@ export class LobbyScene extends Phaser.Scene {
         {
           name: chosenName,
           color: "#000",
-          avatar: currentAvatar.dataURL,
+          characterId: this.selectedCharacterId,
         },
         true
       );
