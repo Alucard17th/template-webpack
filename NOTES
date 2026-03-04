@@ -6,6 +6,148 @@ Add mana/maxMana display in UI. XXX
 
 Handle deck-empty scenarios gracefully. XXX
 
-Add minimal animations for card play & attack (biggest visual upgrade).
+Add minimal animations for card play & attack (biggest visual upgrade). XXX
 
 Store name/avatar in localStorage so returning players don’t have to set them again.
+
+
+_________
+fix the mana surge card name
+
+__________
+CARD TYPES
+    Creature
+    Boost mana
+    Boost attack
+    Heal (player/creature)
+
+_________
+
+What’s the difference?
+
+keywords (e.g., "taunt", "divineShield", "charge", "windfury"):
+short, static flags that change core rules/UI targeting or per-turn counters. They live on the minion’s state (e.g., boardState[uid].tags.taunt = true) and are enforced by your core systems (RequestQueue, targeting checks, attack limits, damage hooks).
+Think: passive capabilities.
+
+effects (objects in effects: [...] with typeGroup + type):
+data-driven, event-bound behaviors that run via the registry at specific moments (battlecry, deathrattle, startTurn, endTurn, etc.). You can add lots of effects without changing core code—just extend runEffectPayload and/or register new effect types.
+Think: scripts that fire on triggers.
+
+You’ll often use both: e.g., a minion with keywords:["taunt"] (passive rule) and a battlecry effect that draws a card.
+
+Registered keywords (your file)
+
+Below I’ll explain what each registered keyword implies and where it’s enforced.
+
+taunt (static rule)
+
+Purpose: Opponents can’t target face (or other non-taunt minions, depending on your rule) while any enemy Taunt minion is alive.
+
+Enforcement: In your UI/RequestQueue targeting logic: before allowing “attack → player” or “attack → non-taunt minion”, check if the defender has any board unit with tags.taunt === true. If yes, force target to a taunt minion.
+
+Registry handler needed? Not strictly. It’s a board rule, not an event. You can still put helper utilities in the registry if you want (e.g., hasTaunt(defenderPS)), but you already handle this in targeting checks.
+
+charge (static rule)
+
+Purpose: Minion can attack the turn it’s played.
+
+Enforcement: When you place the minion, set hasSummoningSickness=false if it has charge (or set attacksLeft to 1 even on the play turn). Without charge, either prevent attacking on same turn or set attacksLeft=0 until next turnStart.
+
+Registry handler? Typically not; enforced in attack eligibility.
+
+windfury (static rule with a per-turn reset)
+
+Purpose: Minion gets 2 attacks per turn.
+
+Enforcement: Your registry does include a handler:
+
+WINDFURY.onTurnStart sets boardState[uid].attacksLeft = 2 for windfury units, and ensures others default to 1.
+
+Your RequestQueue attack flow should decrement attacksLeft and block when it’s 0.
+
+Note: If you support “Mega-Windfury” etc., you’d extend this.
+
+divineShield (static rule with a damage hook)
+
+Purpose: First time the minion would take damage, prevent that damage and remove the shield.
+
+Enforcement: Your registry does include a handler:
+
+DIVINE_SHIELD.onIncomingDamage({ targetPS, targetUid, amount }) returns { canceled:true } and flips tags.divineShield=false—your damage application must call this hook before applying damage (i.e., a centralized “applyIncomingDamage” function that consults the registry).
+
+Note: Currently your creature vs creature code doesn’t call a “damage pipeline” hook; adding one is recommended so Divine Shield works from all sources (combat, spells, auras).
+
+Trigger keywords (event-driven)
+
+These don’t do anything by themselves; they mean the card has effects tied to lifecycle events. Your registry dispatches based on typeGroup.
+
+battlecry
+
+When: The moment the minion card resolves onto the board.
+
+How: Your registry BATTLECRY.onMinionPlayed(ctx) reads effects and runs each with typeGroup === "battlecry".
+
+Examples: draw cards, deal face damage, buff a friendly minion.
+
+deathrattle
+
+When: Right before the minion is removed from the board due to death.
+
+How: DEATHRATTLE.onMinionDied(ctx) runs effects with typeGroup === "deathrattle".
+
+Examples: summon tokens, deal death damage, buff another unit.
+
+startTurn
+
+When: At the start of the owner’s turn.
+
+How: START_OF_TURN.onTurnStart(ctx) scans that player’s board and runs effects with typeGroup === "startTurn" on each minion that has them.
+
+Examples: passive healing, draw 1, refresh self, random pings.
+
+endTurn (you listed it in Keyword, not implemented yet)
+
+When: End of the owner’s turn.
+
+How: Mirror startTurn with END_OF_TURN.onTurnEnd(ctx), scan board, run typeGroup === "endTurn".
+
+Examples: deal 1 to all enemies, float unused mana, etc.
+
+aura (listed but not implemented in the snippet)
+
+Purpose: Continuous buff/debuff while the aura source is alive.
+
+How: You typically:
+
+apply on minionPlayed,
+
+re-apply on any board change (enter/leave), and
+
+remove on minionDied of the aura source.
+For simplicity, many games recompute auras each frame/tick or on every board mutation, rather than trying to incrementally maintain many deltas.
+
+Registered effect types (your runEffectPayload)
+
+You’ve added three concrete types so far; they’re data-driven actions your keywords can invoke.
+
+type: "draw"
+
+Where: Any trigger (battlecry, startTurn, etc.), executed by runEffectPayload.
+
+Behavior: Draws from deckMap.get(caster.id) if hand has room; updates deckSizeSelf.
+
+Fields: count (currently you draw 1 in code; to support count > 1, loop count times).
+
+type: "healFace"
+
+Behavior: Heals player HP (caster by default, or enemy:true to heal opponent).
+
+Fields: amount (clamped to HEALTH_POINTS), enemy boolean to target.
+
+type: "dealFace"
+
+Behavior: Damages player HP (caster or opponent based on enemy).
+
+Fields: amount, enemy.
+
+You can add more effect types (e.g., buffMinion, summon, damageMinion, drawSpecific, discover, gainMana, restoreMana, copy, transform, etc.). Just extend runEffectPayload.

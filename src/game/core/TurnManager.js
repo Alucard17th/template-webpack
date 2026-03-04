@@ -1,5 +1,6 @@
 import { MAX_MANA, MAX_HAND_SIZE } from "./constants.js";
 import { getParticipants } from "playroomkit";
+import { emit } from "./events.js";
 
 /**
  * Pure turn-cycle helper.
@@ -20,7 +21,6 @@ export class TurnManager {
   }
 
   /** Host only – call when a new turn starts for `player`. */
-
   startTurn(player) {
     const turnCount = (player.getState("turnCount") || 0) + 1;
     player.setState("turnCount", turnCount, true);
@@ -56,5 +56,12 @@ export class TurnManager {
     });
 
     this.scene?._updateDeckCounters?.();
+
+    emit("turnStart", {
+      player,
+      foe: [...this.deckMap.keys()].map((id) => id) && null, // you already have access to foe via the scene/players list
+      CARDS_BY_ID: this.scene?.CARDS_BY_ID || undefined,
+      deckMap: this.deckMap,
+    });
   }
 }

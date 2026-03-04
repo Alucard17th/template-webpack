@@ -2,12 +2,12 @@ import { Boot } from "./scenes/Boot";
 import { Game as MainGame } from "./scenes/Game";
 import { GameOver } from "./scenes/GameOver";
 import { LobbyScene } from "./scenes/LobbyScene";
+import { LobbyWin98Scene } from "./scenes/LobbyWin98Scene";
 import { Preloader } from "./scenes/Preloader";
 
 import { Multiplayer } from "./scenes/Multiplayer";
 
-import { AUTO, Game } from "phaser";
-import { insertCoin } from "playroomkit";
+import Phaser, { AUTO, Game } from "phaser";
 
 // Find out more information about the Game Config at:
 // https://docs.phaser.io/api-documentation/typedef/types-core#gameconfig
@@ -36,6 +36,7 @@ const config = {
   scene: [
     Preloader,
     LobbyScene,
+    LobbyWin98Scene,
     Multiplayer,
     // Boot,
     // Preloader,
