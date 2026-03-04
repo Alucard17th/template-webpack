@@ -1,5 +1,6 @@
 import { Scene } from "phaser";
 import { CARDS } from "../../data/cards.js";
+import { CHARACTERS } from "../../data/characters.js";
 
 export class Preloader extends Scene {
   constructor() {
@@ -27,11 +28,16 @@ export class Preloader extends Scene {
     //  Load the assets for the game - Replace with your own assets
     this.load.setPath("assets");
 
-    this.load.image("logo", "logo.png");
-
     this.load.font("Constantia", "fonts/constan.ttf");
 
     this.load.image('boardBg', 'mystic-bg.jpeg');
+
+    this.load.image('appLogo', 'logo-1.png');
+
+    CHARACTERS.forEach((ch) => {
+      if (!ch?.imageKey || !ch?.imagePath) return;
+      if (!this.textures.exists(ch.imageKey)) this.load.image(ch.imageKey, ch.imagePath);
+    });
 
     CARDS.forEach((c) => {
       const key = c.frame;

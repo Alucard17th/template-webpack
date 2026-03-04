@@ -1,12 +1,18 @@
+import Phaser from "phaser";
 import { myPlayer } from "playroomkit";
-import { PlaceholderCard } from "../objects/PlaceholderCard";
-import { CARDS, CARDS_BY_ID } from "../../data/cards";
-
+import { PlaceholderCard } from "../objects/PlaceholderCard.js";
+import { CARDS_BY_ID } from "../../data/cards.js";
+import {
+  CARD_COLORS, // 🎨 single‑source palette
+} from "../core/constants.js";
 const CARD_W = 80;
 const CARD_SPACING = 110;
 const ROW_GAP_RATIO = 0.16;
 
 export class Board extends Phaser.GameObjects.Group {
+
+  static COLORS = CARD_COLORS;
+
   constructor(scene, playerId, isMe, oppState) {
     super(scene);
 
@@ -38,7 +44,6 @@ export class Board extends Phaser.GameObjects.Group {
 
   /** ids MUST be UIDs like "005#17" */
   render(ids) {
-    console.log("[Board] render()", ids);
     if (!ids || !this.group) return;
 
     this.group.clear(true, true);
@@ -106,16 +111,15 @@ export class Board extends Phaser.GameObjects.Group {
         } else if (card.atkDefText) {
           card.atkDefText.setText(`⚔️${data.attack}|❤️${hpToShow}`);
         }
-
-        console.log("[Board] rendering creature hpMap", hpMap[uid]);
-        console.log("[Board] rendering creature data", data);
-        console.log("[Board] rendering creature hpToShow", hpToShow);
-        console.log("[Board] rendering creature card", card);
-
       } else {
         // spells — optional tag/value
         if (card.atkDefText) {
-          const val = data.damage ?? data.heal ?? data.boostAttack ?? data.boostMana ?? "";
+          const val =
+            data.damage ??
+            data.heal ??
+            data.boostAttack ??
+            data.boostMana ??
+            "";
           card.atkDefText.setText(val !== "" ? `✦${val}` : ``);
         }
       }
@@ -138,7 +142,12 @@ export class Board extends Phaser.GameObjects.Group {
   }
 
   updateHpTexts(stateMap) {
+    const PLUS = "#2ecc71"; // green
+    const MINUS = "#e74c3c"; // red
+    const NORMAL = Board.COLORS.hexHpText;
+
     this.group.getChildren().forEach((card) => {
+      // climb to the real container if child clicked
       const c = card?.isCard
         ? card
         : card?.parentContainer?.isCard
@@ -148,22 +157,35 @@ export class Board extends Phaser.GameObjects.Group {
 
       const baseId = c.cardId;
       const data = CARDS_BY_ID[baseId] || {};
-      if (data.type !== "creature") return;
+      if (data.type !== "creature") return; // spells ignore
 
+      // ----- current vs base stats ---------------------------------
       const uid = c.uid ?? baseId;
-      const state = stateMap[uid];
+      const state = stateMap[uid] || {};
 
-      // ✅ Fallback to base stats if not in boardState
-      const atkToShow = state?.atk ?? data.attack;
-      const hpToShow = state?.hp ?? data.health;
+      const curAtk = state.atk ?? data.attack;
+      const curHp = state.hp ?? data.health;
 
-      if (c.hpText && c.atkText) {
-        // Your PlaceholderCard has atkText & hpText
-        c.atkText.setText(`⚔️${atkToShow}`);
-        c.hpText.setText(`❤️${hpToShow}`);
+      // ----- text & colour -----------------------------------------
+      if (c.atkText && c.hpText) {
+        c.atkText.setText(`⚔️${curAtk}`);
+        c.hpText.setText(`❤️${curHp}`);
+
+        // ATK colour
+        c.atkText.setColor(
+          curAtk > data.attack ? PLUS : curAtk < data.attack ? MINUS : NORMAL
+        );
+        // HP colour
+        c.hpText.setColor(
+          curHp > data.health ? PLUS : curHp < data.health ? MINUS : NORMAL
+        );
       } else if (c.atkDefText) {
-        // Combined format
-        c.atkDefText.setText(`⚔️${atkToShow}|❤️${hpToShow}`);
+        // fallback for “⚔️x|❤️y” combined text
+        c.atkDefText.setText(`⚔️${curAtk}|❤️${curHp}`);
+        // single colour for the block (choose HP logic as cue)
+        c.atkDefText.setColor(
+          curHp > data.health ? PLUS : curHp < data.health ? MINUS : NORMAL
+        );
       }
     });
   }
