@@ -6,7 +6,7 @@ export const HEALTH_POINTS = 10;
 export const STARTING_MANA = 7;
 export const MAX_MANA = 10;
 export const START_HAND_SIZE = 5;
-export const MAX_HAND_SIZE = 5;
+export const MAX_HAND_SIZE = 10;
 export const DECK_COPIES = 3; // how many copies of each card when building a deck
 export const TICK_MS = 50; // host request‑processing tick
 

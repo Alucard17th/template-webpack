@@ -3,6 +3,7 @@
 // Works with your PlayerState (getState/setState), boardState maps, and your Deck via deckMap.
 
 import { HEALTH_POINTS, MAX_MANA, MAX_HAND_SIZE } from "./constants.js";
+import { emit } from "./events.js";
 
 /* ---------- small helpers ---------- */
 
@@ -109,7 +110,15 @@ registerSpell("heal", ({ card, dst, caster, CARDS_BY_ID, log }) => {
 });
 
 /** Damage: opponent face (dst === "player") or target creature. Uses card.damage/amount. */
-registerSpell("damage", ({ card, dst, caster, opponent, CARDS_BY_ID, log }) => {
+registerSpell("damage", ({
+  card,
+  dst,
+  caster,
+  opponent,
+  CARDS_BY_ID,
+  deckMap,
+  log,
+}) => {
   const amount = Number(card.damage ?? card.amount ?? 0);
   if (!amount) return;
 
@@ -128,6 +137,22 @@ registerSpell("damage", ({ card, dst, caster, opponent, CARDS_BY_ID, log }) => {
   const stats = readCreature(owner, dst, CARDS_BY_ID);
   const next = { ...stats, hp: stats.hp - amount };
   const { removed } = writeCreatureOrKill(owner, dst, next);
+
+  if (removed) {
+    const gy = owner.getState("graveyard") || [];
+    gy.push(dst);
+    owner.setState("graveyard", gy, true);
+
+    const base = CARDS_BY_ID[bid(dst)];
+    const other = owner === caster ? opponent : caster;
+    emit("minionDied", {
+      ownerPS: owner,
+      opponentPS: other,
+      uid: dst,
+      base,
+      deckMap,
+    });
+  }
   log?.(
     removed
       ? `Dealt ${amount} to ${dst} (destroyed).`

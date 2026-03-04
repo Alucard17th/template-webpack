@@ -42,10 +42,12 @@ export function makeFaceZone(
   z.isFace = true;
   z.owner = owner;
 
-  scene.add
-    .graphics()
-    .lineStyle(1, 0xff00ff, 0.35)
-    .strokeRectShape(z.getBounds());
+  if (scene?.showDebugFaceZones) {
+    scene.add
+      .graphics()
+      .lineStyle(1, 0xff00ff, 0.35)
+      .strokeRectShape(z.getBounds());
+  }
 
   return z;
 }

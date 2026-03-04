@@ -115,15 +115,110 @@ export class Multiplayer extends Phaser.Scene {
   }
 
   _setupGraveyardUi() {
-    this.graveyardCounter = this.add.text(50, 50, "", {
-      fontSize: 18,
-      color: "#ccc",
+    const makeWidget = () => {
+      const container = this.add.container(0, 0).setDepth(9000).setScrollFactor(0);
+
+      const bg = this.add.graphics();
+      const hit = this.add
+        .zone(0, 0, 1, 1)
+        .setOrigin(0)
+        .setInteractive({ useHandCursor: true });
+      const label = this.add
+        .text(0, 0, "", {
+          fontSize: 18,
+          color: "#2a1b12",
+          fontStyle: "bold",
+          fontFamily: "sans-serif",
+        })
+        .setOrigin(0, 0.5);
+
+      const count = this.add
+        .text(0, 0, "0", {
+          fontSize: 20,
+          color: "#ffffff",
+          fontStyle: "bold",
+          fontFamily: "sans-serif",
+        })
+        .setOrigin(1, 0.5);
+
+      container.add([bg, label, count, hit]);
+
+      const setText = (labelText, countText) => {
+        label.setText(labelText);
+        count.setText(String(countText));
+
+        const w = Math.max(120, label.width + count.width + 44);
+        const h = 34;
+        const padX = 14;
+
+        bg.clear();
+        bg.fillStyle(0x000000, 0.25);
+        bg.fillRoundedRect(2, 3, w, h, 10);
+        bg.fillStyle(0xf2e3c6, 0.92);
+        bg.fillRoundedRect(0, 0, w, h, 10);
+        bg.lineStyle(2, 0x7a5a18, 0.65);
+        bg.strokeRoundedRect(0, 0, w, h, 10);
+
+        label.setPosition(padX, h / 2);
+        count.setPosition(w - padX, h / 2);
+
+        container.setSize(w, h);
+
+        hit.setPosition(0, 0);
+        hit.setSize(w, h);
+      };
+
+      return { container, setText, hit };
+    };
+
+    this._myGraveyardUi = makeWidget();
+    this._oppGraveyardUi = makeWidget();
+
+    this._myGraveyardUi.hit.on("pointerup", () => {
+      this._openGraveyardModal("my");
+    });
+    this._oppGraveyardUi.hit.on("pointerup", () => {
+      this._openGraveyardModal("opp");
     });
 
-    this.updateGraveyardCount = () => {
-      const myGraveyard = myPlayer().getState("graveyard") || [];
-      this.graveyardCounter.setText(`🪦 ${myGraveyard.length}`);
+    this._layoutGraveyardUi = () => {
+      const h = this.scale.height;
+      const margin = 18;
+
+      this._oppGraveyardUi.container.setPosition(margin, margin);
+      // Default position (before turn UI exists): bottom-left
+      this._myGraveyardUi.container.setPosition(
+        margin,
+        h - margin - this._myGraveyardUi.container.height
+      );
+
+      // If the turn UI exists, dock my graveyard near the turn section (above turnText).
+      if (this.endBtn && this.turnText) {
+        const b = this.endBtn.getBounds();
+        const wMy = this._myGraveyardUi.container.width;
+        const hMy = this._myGraveyardUi.container.height;
+        this._myGraveyardUi.container.setPosition(
+          Math.round(b.centerX - wMy / 2),
+          Math.round(b.top - 44 - hMy)
+        );
+      }
     };
+
+    this.scale.on("resize", () => {
+      this._layoutGraveyardUi();
+    });
+
+    this._layoutGraveyardUi();
+
+    this.updateGraveyardCount = () => {
+      const myGraveyard = myPlayer()?.getState("graveyard") || [];
+      const oppGraveyard = this.oppState?.getState("graveyard") || [];
+
+      this._myGraveyardUi.setText("Graveyard", myGraveyard.length);
+      this._oppGraveyardUi.setText("Opponent Graveyard", oppGraveyard.length);
+    };
+
+    this.updateGraveyardCount();
   }
 
   _setupSceneUi() {
@@ -597,6 +692,7 @@ export class Multiplayer extends Phaser.Scene {
     /* 5. turn UI etc. (unchanged) ───────────────── */
     this.endBtn = this.ui.createEndTurnButton();
     const b = this.endBtn.getBounds();
+
     this.turnText = this.add
       .text(b.centerX, b.top - 10, "", {
         fontSize: 22,
@@ -607,7 +703,10 @@ export class Multiplayer extends Phaser.Scene {
     this.scale.on("resize", () => {
       const nb = this.endBtn.getBounds();
       this.turnText.setPosition(nb.centerX, nb.top - 10);
+      this._layoutGraveyardUi?.();
     });
+
+    this._layoutGraveyardUi?.();
 
     this.time.addEvent({
       delay: 100,
@@ -616,6 +715,7 @@ export class Multiplayer extends Phaser.Scene {
         const cur = getState("turnPlayerId");
         if (!cur) return;
         const mine = cur === myPlayer().id;
+
         this.turnText.setText(mine ? "Your Turn" : "Opponent Turn");
         this.endBtn.setVisible(mine);
       },
@@ -1023,6 +1123,209 @@ export class Multiplayer extends Phaser.Scene {
 
   _updateCardDetails(cardData) {
     updateCardDetails(this, cardData);
+  }
+
+  _openGraveyardModal(which) {
+    if (this._graveyardModal?.active) return;
+
+    const isMine = which === "my";
+    const ownerPS = isMine ? myPlayer() : this.oppState;
+    if (!ownerPS) return;
+
+    const graveyard = ownerPS.getState("graveyard") || [];
+    const title = isMine ? "Your Graveyard" : "Opponent Graveyard";
+
+    const Z = 20000;
+    const w = this.scale.width;
+    const h = this.scale.height;
+
+    const overlay = this.add
+      .rectangle(0, 0, w, h, 0x000000, 0.75)
+      .setOrigin(0)
+      .setDepth(Z)
+      .setScrollFactor(0)
+      .setInteractive({ useHandCursor: true });
+
+    const panelW = Math.min(1200, Math.max(760, Math.floor(w * 0.78)));
+    const panelH = Math.min(780, Math.max(520, Math.floor(h * 0.72)));
+    const panelX = Math.floor(w / 2);
+    const panelY = Math.floor(h / 2);
+
+    const panelBg = this.add
+      .rectangle(panelX, panelY, panelW, panelH, 0xf2e3c6, 0.98)
+      .setOrigin(0.5)
+      .setDepth(Z + 1)
+      .setScrollFactor(0);
+
+    const panelStroke = this.add.graphics().setDepth(Z + 2).setScrollFactor(0);
+    panelStroke
+      .lineStyle(3, 0x7a5a18, 0.85)
+      .strokeRoundedRect(
+        panelX - panelW / 2,
+        panelY - panelH / 2,
+        panelW,
+        panelH,
+        14
+      );
+
+    const headerY = panelY - panelH / 2 + 24;
+    const header = this.add
+      .text(panelX - panelW / 2 + 24, headerY, title, {
+        fontSize: 28,
+        color: "#2a1b12",
+        fontStyle: "bold",
+        fontFamily: "sans-serif",
+      })
+      .setOrigin(0, 0)
+      .setDepth(Z + 3)
+      .setScrollFactor(0);
+
+    const closeBtn = this.add
+      .text(panelX + panelW / 2 - 24, headerY, "X", {
+        fontSize: 28,
+        color: "#2a1b12",
+        fontStyle: "bold",
+        fontFamily: "sans-serif",
+      })
+      .setOrigin(1, 0)
+      .setDepth(Z + 3)
+      .setScrollFactor(0)
+      .setInteractive({ useHandCursor: true });
+
+    const innerPad = 24;
+    const contentX = panelX - panelW / 2 + innerPad;
+    const contentY = headerY + 52;
+    const contentW = panelW - innerPad * 2;
+    const contentH = panelH - (contentY - (panelY - panelH / 2)) - innerPad;
+
+    const maskG = this.add.graphics().setDepth(Z + 1).setScrollFactor(0);
+    maskG.fillStyle(0xffffff, 1);
+    maskG.fillRect(contentX, contentY, contentW, contentH);
+    const mask = maskG.createGeometryMask();
+    maskG.setVisible(false);
+
+    const content = this.add.container(0, 0).setDepth(Z + 4).setScrollFactor(0);
+    content.setMask(mask);
+
+    const hint = this.add
+      .text(panelX, panelY, "", {
+        fontSize: 22,
+        color: "#2a1b12",
+        fontStyle: "bold",
+        fontFamily: "sans-serif",
+      })
+      .setOrigin(0.5)
+      .setDepth(Z + 4)
+      .setScrollFactor(0);
+
+    let scrollY = 0;
+    const layoutCards = () => {
+      content.removeAll(true);
+      hint.setText("");
+
+      if (!graveyard.length) {
+        hint.setText("Graveyard is empty.");
+        hint.setPosition(panelX, panelY);
+        return;
+      }
+
+      const cardsPerRow = Math.max(1, Math.floor(contentW / 120));
+      const spacingX = Math.floor(contentW / cardsPerRow);
+      const spacingY = 185;
+
+      const canvas = this.game.canvas;
+
+      graveyard.forEach((uid, i) => {
+        const baseId = String(uid).split("#")[0];
+        const col = i % cardsPerRow;
+        const row = Math.floor(i / cardsPerRow);
+        const x = contentX + Math.floor(col * spacingX + spacingX / 2);
+        const y = contentY + Math.floor(row * spacingY + 110) + scrollY;
+
+        const c = new PlaceholderCard(this, baseId, x, y, uid);
+        c.setDepth(Z + 5);
+        c.on("pointerover", () => {
+          const cd = CARDS_BY_ID[baseId];
+          if (cd) this._updateCardDetails(cd);
+          canvas.classList.add("card-hover");
+        });
+        c.on("pointerout", () => {
+          this.cardDetailText.setText("Hover a card to see details");
+          canvas.classList.remove("card-hover");
+        });
+        content.add(c);
+      });
+    };
+
+    const close = () => this._closeGraveyardModal();
+    closeBtn.on("pointerup", close);
+
+    overlay.on("pointerup", (pointer) => {
+      const inside = Phaser.Geom.Rectangle.Contains(
+        new Phaser.Geom.Rectangle(
+          panelX - panelW / 2,
+          panelY - panelH / 2,
+          panelW,
+          panelH
+        ),
+        pointer.x,
+        pointer.y
+      );
+      if (!inside) close();
+    });
+
+    this._graveyardEscKey?.destroy?.();
+    this._graveyardEscKey = this.input.keyboard?.addKey(
+      Phaser.Input.Keyboard.KeyCodes.ESC
+    );
+    this._graveyardEscKey?.once?.("down", close);
+
+    const onWheel = (pointer, gameObjects, deltaX, deltaY) => {
+      if (!graveyard.length) return;
+      scrollY = Phaser.Math.Clamp(scrollY - deltaY * 0.6, -4000, 0);
+      layoutCards();
+    };
+    this.input.on("wheel", onWheel);
+
+    this._graveyardModal = {
+      active: true,
+      overlay,
+      panelBg,
+      panelStroke,
+      header,
+      closeBtn,
+      content,
+      hint,
+      maskG,
+      onWheel,
+    };
+
+    this.scale.once("resize", () => {
+      close();
+    });
+
+    layoutCards();
+  }
+
+  _closeGraveyardModal() {
+    const m = this._graveyardModal;
+    if (!m?.active) return;
+
+    this.input.off("wheel", m.onWheel);
+    this._graveyardEscKey?.destroy?.();
+    this._graveyardEscKey = null;
+
+    m.content?.removeAll?.(true);
+    m.content?.destroy?.(true);
+    m.maskG?.destroy?.();
+    m.hint?.destroy?.();
+    m.closeBtn?.destroy?.();
+    m.header?.destroy?.();
+    m.panelStroke?.destroy?.();
+    m.panelBg?.destroy?.();
+    m.overlay?.destroy?.();
+
+    this._graveyardModal = null;
   }
 
   _playCardAnimation() {

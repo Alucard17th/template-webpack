@@ -1,4 +1,3 @@
-import { resolveWithRegistry } from "./SpellRegistry.js";
 import { getKeyword, Keyword } from "./KeywordRegistry.js";
 import { emit } from "./events.js";
 
@@ -53,7 +52,15 @@ import { emit } from "./events.js";
 //   defPS.setState("boardState", defBS, true);
 // }
 
-export function applyCreatureDamage(srcUid, dstUid, atkPS, defPS, srcData, dstData) {
+export function applyCreatureDamage(
+  srcUid,
+  dstUid,
+  atkPS,
+  defPS,
+  srcData,
+  dstData,
+  deckMap = null
+) {
   const atkBS = { ...(atkPS.getState("boardState") || {}) };
   const defBS = { ...(defPS.getState("boardState") || {}) };
 
@@ -80,6 +87,10 @@ export function applyCreatureDamage(srcUid, dstUid, atkPS, defPS, srcData, dstDa
     defPS.setState("board", board.filter((id) => id !== dstUid), true);
     delete defBS[dstUid];
     defenderDied = true;
+
+    const gy = defPS.getState("graveyard") || [];
+    gy.push(dstUid);
+    defPS.setState("graveyard", gy, true);
   } else {
     defBS[dstUid] = { ...dstStats, hp: newDstHp };
   }
@@ -89,6 +100,10 @@ export function applyCreatureDamage(srcUid, dstUid, atkPS, defPS, srcData, dstDa
     atkPS.setState("board", board.filter((id) => id !== srcUid), true);
     delete atkBS[srcUid];
     attackerDied = true;
+
+    const gy = atkPS.getState("graveyard") || [];
+    gy.push(srcUid);
+    atkPS.setState("graveyard", gy, true);
   } else {
     // decrement attacksLeft for the attacker (handles Windfury/normal)
     const attacksLeft = (srcStats.attacksLeft ?? 1) - 1;
@@ -99,8 +114,22 @@ export function applyCreatureDamage(srcUid, dstUid, atkPS, defPS, srcData, dstDa
   defPS.setState("boardState", defBS, true);
 
   // Emit deathrattles
-  if (defenderDied) emit("minionDied", { ownerPS: defPS, opponentPS: atkPS, uid: dstUid, base: dstData, deckMap: null });
-  if (attackerDied) emit("minionDied", { ownerPS: atkPS, opponentPS: defPS, uid: srcUid, base: srcData, deckMap: null });
+  if (defenderDied)
+    emit("minionDied", {
+      ownerPS: defPS,
+      opponentPS: atkPS,
+      uid: dstUid,
+      base: dstData,
+      deckMap,
+    });
+  if (attackerDied)
+    emit("minionDied", {
+      ownerPS: atkPS,
+      opponentPS: defPS,
+      uid: srcUid,
+      base: srcData,
+      deckMap,
+    });
 }
 
 

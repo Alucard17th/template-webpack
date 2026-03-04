@@ -338,17 +338,21 @@ export class RequestQueue {
 
     /* ── 2-a  attacking an enemy creature ────────────────────── */
     if (oppBoard.includes(dst)) {
-      // TAUNT gate: if any taunts exist on defender board, you must hit one of them
-      const legal = getLegalMinionTargets(opponent);
-      if (!legal.includes(dst)) {
-        p.setState("reject", { reason: "mustHitTaunt" }, true);
-        return;
-      }
+      const attackerBase = src.split("#")[0];
+      const srcCardData = this.CARDS_BY_ID[attackerBase];
 
       const defenderBase = dst.split("#")[0];
-      const defenderCard = this.CARDS_BY_ID[defenderBase];
+      const defenderCardData = this.CARDS_BY_ID[defenderBase];
 
-      applyCreatureDamage(src, dst, p, opponent, srcCard, defenderCard);
+      applyCreatureDamage(
+        src,
+        dst,
+        p,
+        opponent,
+        srcCardData,
+        defenderCardData,
+        this.turnManager.deckMap
+      );
       this._flagAsAttacked(p, src);
     } else if (dst === "player") {
       /* ── 2-b  attacking the opponent’s face (strict rule) ───── */
@@ -359,7 +363,7 @@ export class RequestQueue {
       }
 
       const hp = opponent.getState("hp") ?? 0;
-      opponent.setState("hp", hp - attackerStats.atk, true);
+      opponent.setState("hp", Math.max(0, hp - attackerStats.atk), true);
       this._flagAsAttacked(p, src);
     } else {
       // Unknown target: ignore
@@ -430,7 +434,7 @@ export class RequestQueue {
   _needsTarget(card) {
     // Spells that *modify* something on the board must be targeted.
     // Everything else (draw, boostMana, etc.) resolves instantly.
-    return !!(card.damage || card.heal || card.boostAttack || card.boostMana);
+    return !!(card.damage || card.heal || card.boostAttack);
   }
 
   _removeSpellCard(playerState, uid) {
